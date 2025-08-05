@@ -621,3 +621,9 @@ Appears as card-like interface in stream:
 ```
 
 This specification provides a comprehensive foundation for building Clarity with integrated file system support, enabling seamless import and synchronization of content through multiple channels while maintaining the core knowledge management functionality.
+
+
+
+# MORE NOTES
+
+When using psql you can only connect using socket connection
