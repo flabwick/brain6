@@ -58,11 +58,11 @@ const AppContent: React.FC = () => {
 
       const response = await api.post('/streams', {
         brainId: selectedBrain.id,
-        title: title.trim(),
+        name: title.trim(),
         isFavorited: false
       });
 
-      const newStream = response.data.data;
+      const newStream = response.data.stream;
       setStream(newStream);
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to create stream';

@@ -85,7 +85,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     dispatch({ type: 'LOGIN_START' });
     try {
       const response = await api.post('/auth/login', credentials);
-      dispatch({ type: 'LOGIN_SUCCESS', payload: response.data.data.user });
+      dispatch({ type: 'LOGIN_SUCCESS', payload: response.data.user });
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || 'Login failed';
       dispatch({ type: 'LOGIN_ERROR', payload: errorMessage });
@@ -106,7 +106,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     dispatch({ type: 'CHECK_AUTH_START' });
     try {
       const response = await api.get('/auth/user');
-      dispatch({ type: 'CHECK_AUTH_SUCCESS', payload: response.data.data });
+      dispatch({ type: 'CHECK_AUTH_SUCCESS', payload: response.data.user });
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || 'Authentication check failed';
       dispatch({ type: 'CHECK_AUTH_ERROR', payload: errorMessage });

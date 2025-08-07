@@ -1,460 +1,247 @@
+const { Command } = require('commander');
+const chalk = require('chalk');
 const Stream = require('../../src/models/Stream');
 const StreamCard = require('../../src/models/StreamCard');
 const Card = require('../../src/models/Card');
 const Brain = require('../../src/models/Brain');
 const StreamManager = require('../../src/services/streamManager');
-const { ensureAuthentication } = require('../utils/auth');
+const { getCurrentUser } = require('../utils/auth');
+const { formatTable, formatJson } = require('../utils/formatting');
 
 /**
- * Stream CLI Commands
+ * CLI Commands for Stream Management
  */
 
+const streamsCommand = new Command('streams')
+  .description('Manage streams in brains');
+
 /**
- * List streams for a brain
+ * List streams in a brain
  */
-async function listStreams(brainName) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const streams = await Stream.findByBrainId(brain.id);
-  const streamsWithStats = await Promise.all(
-    streams.map(async (stream) => {
-      const data = await stream.toJSON();
-      return {
-        ...data,
-        brainName: brainName,
-        favorite: data.isFavorited ? '⭐' : '',
-        lastAccessed: data.lastAccessedAt ? new Date(data.lastAccessedAt).toLocaleDateString() : 'Never'
-      };
-    })
-  );
-  
-  return {
-    brainName,
-    streams: streamsWithStats,
-    count: streamsWithStats.length
-  };
-}
+streamsCommand
+  .command('list')
+  .description('List streams in a brain')
+  .option('-b, --brain <name>', 'Brain name (required)')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    try {
+      if (!options.brain) {
+        console.error(chalk.red('❌ Brain name is required. Use -b or --brain option.'));
+        process.exit(1);
+      }
+
+      const user = await getCurrentUser();
+      const brain = await Brain.findByUserAndName(user.id, options.brain);
+      if (!brain) {
+        throw new Error(`Brain '${options.brain}' not found`);
+      }
+
+      const streams = await Stream.findByBrainId(brain.id);
+      
+      if (options.json) {
+        console.log(JSON.stringify(streams, null, 2));
+      } else {
+        if (streams.length === 0) {
+          console.log(chalk.yellow('No streams found in brain ' + options.brain));
+        } else {
+          console.log(chalk.green(`Found ${streams.length} streams in brain '${options.brain}':`));
+          console.log(formatTable(streams.map(stream => ({
+            Name: stream.title,
+            Favorited: stream.isFavorited ? '⭐' : '',
+            'Last Accessed': new Date(stream.lastAccessedAt).toLocaleDateString(),
+            Created: new Date(stream.createdAt).toLocaleDateString()
+          }))));
+        }
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ Error listing streams:'), error.message);
+      process.exit(1);
+    }
+  });
 
 /**
  * Create a new stream
  */
-async function createStream(streamName, brainName) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.create(brain.id, streamName, false);
-  const streamData = await stream.toJSON();
-  
-  return {
-    ...streamData,
-    brainName,
-    message: `Stream '${streamName}' created successfully`
-  };
-}
+streamsCommand
+  .command('create')
+  .description('Create a new stream')
+  .argument('<title>', 'Stream title')
+  .option('-b, --brain <name>', 'Brain name (required)')
+  .option('--json', 'Output as JSON')
+  .action(async (title, options) => {
+    try {
+      if (!options.brain) {
+        console.error(chalk.red('❌ Brain name is required. Use -b or --brain option.'));
+        process.exit(1);
+      }
+
+      const user = await getCurrentUser();
+      const brain = await Brain.findByUserAndName(user.id, options.brain);
+      if (!brain) {
+        throw new Error(`Brain '${options.brain}' not found`);
+      }
+
+      const stream = await Stream.create({
+        brainId: brain.id,
+        title: title,
+        isFavorited: false
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(stream, null, 2));
+      } else {
+        console.log(chalk.green(`✅ Created stream '${title}' in brain '${options.brain}'`));
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ Error creating stream:'), error.message);
+      process.exit(1);
+    }
+  });
 
 /**
  * Delete a stream
  */
-async function deleteStream(streamName, brainName) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  await stream.delete();
-  
-  return {
-    streamName,
-    brainName,
-    deleted: true,
-    message: `Stream '${streamName}' deleted successfully`
-  };
-}
+streamsCommand
+  .command('delete')
+  .description('Delete a stream')
+  .argument('<title>', 'Stream title')
+  .option('-b, --brain <name>', 'Brain name (required)')
+  .option('-y, --yes', 'Skip confirmation')
+  .action(async (title, options) => {
+    try {
+      if (!options.brain) {
+        console.error(chalk.red('❌ Brain name is required. Use -b or --brain option.'));
+        process.exit(1);
+      }
 
-/**
- * Toggle favorite status of a stream
- */
-async function toggleFavoriteStream(streamName, brainName) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  await stream.toggleFavorite();
-  
-  return {
-    streamName,
-    brainName,
-    isFavorited: stream.isFavorited,
-    status: stream.isFavorited ? '⭐ Favorited' : 'Unfavorited',
-    message: `Stream '${streamName}' ${stream.isFavorited ? 'added to' : 'removed from'} favorites`
-  };
-}
+      const user = await getCurrentUser();
+      const brain = await Brain.findByUserAndName(user.id, options.brain);
+      if (!brain) {
+        throw new Error(`Brain '${options.brain}' not found`);
+      }
 
-/**
- * Show stream contents
- */
-async function showStream(streamName, brainName, includeContent = false) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  const streamData = await StreamManager.getStreamWithCards(stream.id, includeContent);
-  
-  // Format cards for CLI display
-  const formattedCards = streamData.cards.map((card, index) => ({
-    position: card.position,
-    title: card.title,
-    depth: card.depth,
-    indent: '  '.repeat(card.depth),
-    aiContext: card.isInAIContext ? '✨' : '',
-    collapsed: card.isCollapsed ? '📁' : '📄',
-    preview: card.contentPreview ? card.contentPreview.substring(0, 100) + '...' : '',
-    content: includeContent ? card.content : undefined
-  }));
-  
-  return {
-    streamName,
-    brainName,
-    isFavorited: streamData.isFavorited,
-    totalCards: streamData.totalCards,
-    aiContextCount: streamData.aiContextCount,
-    cards: formattedCards,
-    lastAccessed: streamData.lastAccessedAt
-  };
-}
+      const stream = await Stream.findByBrainAndName(brain.id, title);
+      if (!stream) {
+        throw new Error(`Stream '${title}' not found in brain '${options.brain}'`);
+      }
 
-/**
- * Show AI context cards for a stream
- */
-async function showStreamAIContext(streamName, brainName) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  const aiContextCards = await StreamCard.getAIContextCards(stream.id);
-  
-  const formattedCards = aiContextCards.map(card => ({
-    position: card.position,
-    title: card.title,
-    depth: card.depth,
-    indent: '  '.repeat(card.depth),
-    preview: card.contentPreview ? card.contentPreview.substring(0, 100) + '...' : ''
-  }));
-  
-  return {
-    streamName,
-    brainName,
-    aiContextCards: formattedCards,
-    count: aiContextCards.length,
-    message: `${aiContextCards.length} cards in AI context`
-  };
-}
+      if (!options.yes) {
+        const readline = require('readline');
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
 
-/**
- * Add card to stream
- */
-async function addCardToStream(cardTitle, streamName, brainName, options = {}) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  const card = await Card.findByBrainAndTitle(brain.id, cardTitle);
-  if (!card) {
-    throw new Error(`Card '${cardTitle}' not found in brain '${brainName}'`);
-  }
-  
-  const { position, depth = 0, isInAIContext = false, isCollapsed = false } = options;
-  
-  const result = await StreamManager.addCardToStream(
-    stream.id, 
-    card.id, 
-    position, 
-    depth, 
-    { isInAIContext, isCollapsed }
-  );
-  
-  return {
-    cardTitle,
-    streamName,
-    brainName,
-    position: result.insertedAt,
-    depth,
-    aiContext: isInAIContext ? '✨' : '',
-    collapsed: isCollapsed ? '📁' : '📄',
-    message: `Card '${cardTitle}' added to stream '${streamName}' at position ${result.insertedAt}`
-  };
-}
+        const answer = await new Promise(resolve => {
+          rl.question(`Delete stream '${title}'? This cannot be undone. (y/N) `, resolve);
+        });
+        rl.close();
 
-/**
- * Remove card from stream
- */
-async function removeCardFromStream(cardTitle, streamName, brainName) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  const card = await Card.findByBrainAndTitle(brain.id, cardTitle);
-  if (!card) {
-    throw new Error(`Card '${cardTitle}' not found in brain '${brainName}'`);
-  }
-  
-  const result = await StreamManager.removeCardFromStream(stream.id, card.id);
-  
-  if (!result.removed) {
-    throw new Error(`Card '${cardTitle}' is not in stream '${streamName}'`);
-  }
-  
-  return {
-    cardTitle,
-    streamName,
-    brainName,
-    removed: true,
-    totalCards: result.totalCards,
-    message: `Card '${cardTitle}' removed from stream '${streamName}'`
-  };
-}
+        if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+          console.log(chalk.yellow('Operation cancelled'));
+          return;
+        }
+      }
 
-/**
- * Move card to new position in stream
- */
-async function moveCardInStream(cardTitle, streamName, brainName, newPosition, newDepth = null) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  const card = await Card.findByBrainAndTitle(brain.id, cardTitle);
-  if (!card) {
-    throw new Error(`Card '${cardTitle}' not found in brain '${brainName}'`);
-  }
-  
-  const result = await StreamManager.moveCard(stream.id, card.id, newPosition, newDepth);
-  
-  if (!result.changed) {
-    return {
-      cardTitle,
-      streamName,
-      brainName,
-      message: `Card '${cardTitle}' is already at the requested position`
-    };
-  }
-  
-  return {
-    cardTitle,
-    streamName,
-    brainName,
-    newPosition,
-    newDepth,
-    totalCards: result.totalCards,
-    message: `Card '${cardTitle}' moved to position ${newPosition}${newDepth !== null ? ` with depth ${newDepth}` : ''}`
-  };
-}
-
-/**
- * Search cards for adding to streams
- */
-async function searchCards(query, brainName, includeOtherBrains = true) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const results = await StreamManager.searchCardsForStream(
-    brain.id, 
-    query, 
-    includeOtherBrains, 
-    user.id
-  );
-  
-  const formatCards = (cards) => cards.map(card => ({
-    title: card.title,
-    brainName: card.brainName || brainName,
-    preview: card.contentPreview ? card.contentPreview.substring(0, 80) + '...' : '',
-    hasFile: card.hasFile ? '📄' : '✏️',
-    size: card.fileSize ? `${Math.round(card.fileSize / 1024)}KB` : '0KB'
-  }));
-  
-  return {
-    query,
-    brainName,
-    currentBrain: {
-      cards: formatCards(results.currentBrain),
-      count: results.currentBrain.length
-    },
-    otherBrains: {
-      cards: formatCards(results.otherBrains),
-      count: results.otherBrains.length
-    },
-    totalResults: results.totalResults
-  };
-}
-
-/**
- * Duplicate a stream
- */
-async function duplicateStream(streamName, brainName, newStreamName) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  const result = await StreamManager.duplicateStream(stream.id, newStreamName);
-  
-  return {
-    originalStream: streamName,
-    newStream: newStreamName,
-    brainName,
-    cardsCopied: result.totalCards,
-    message: `Stream '${streamName}' duplicated as '${newStreamName}' with ${result.totalCards} cards`
-  };
-}
-
-/**
- * Get stream statistics
- */
-async function getStreamStats(streamName, brainName) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const stream = await Stream.findByBrainAndName(brain.id, streamName);
-  if (!stream) {
-    throw new Error(`Stream '${streamName}' not found in brain '${brainName}'`);
-  }
-  
-  const stats = await StreamManager.getStreamStats(stream.id);
-  
-  return {
-    ...stats,
-    brainName,
-    formattedStats: {
-      cards: `${stats.totalCards} total`,
-      aiContext: `${stats.aiContextCount} in AI context`,
-      depth: `Average depth: ${stats.averageDepth.toFixed(1)}`,
-      nested: stats.hasNestedCards ? 'Has nested cards' : 'Flat structure',
-      size: `${Math.round(stats.aiContextSize / 1024)}KB in AI context`,
-      favorited: stats.isFavorited ? '⭐ Favorited' : 'Not favorited'
+      await Stream.delete(stream.id);
+      console.log(chalk.green(`✅ Deleted stream '${title}' from brain '${options.brain}'`));
+    } catch (error) {
+      console.error(chalk.red('❌ Error deleting stream:'), error.message);
+      process.exit(1);
     }
-  };
-}
+  });
 
 /**
- * Get analytics for all streams in a brain
+ * Show stream details
  */
-async function getStreamAnalytics(brainName, limit = 10) {
-  const user = await ensureAuthentication();
-  
-  const brain = await Brain.findByUserAndName(user.id, brainName);
-  if (!brain) {
-    throw new Error(`Brain '${brainName}' not found`);
-  }
-  
-  const analytics = await StreamManager.getStreamAnalytics(brain.id, limit);
-  
-  return {
-    brainName,
-    analytics: analytics.analytics,
-    recentStreams: analytics.recentStreams.map(stream => ({
-      ...stream,
-      favorite: stream.isFavorited ? '⭐' : '',
-      lastAccessed: new Date(stream.lastAccessedAt).toLocaleDateString()
-    })),
-    summary: {
-      total: `${analytics.analytics.totalStreams} streams`,
-      favorites: `${analytics.analytics.favoritedStreams} favorited`,
-      avgCards: `${analytics.analytics.avgCardsPerStream.toFixed(1)} cards per stream`,
-      uniqueCards: `${analytics.analytics.uniqueCardsInStreams} unique cards used`
-    }
-  };
-}
+streamsCommand
+  .command('show')
+  .description('Show stream details and cards')
+  .argument('<title>', 'Stream title')
+  .option('-b, --brain <name>', 'Brain name (required)')
+  .option('--json', 'Output as JSON')
+  .action(async (title, options) => {
+    try {
+      if (!options.brain) {
+        console.error(chalk.red('❌ Brain name is required. Use -b or --brain option.'));
+        process.exit(1);
+      }
 
-module.exports = {
-  listStreams,
-  createStream,
-  deleteStream,
-  toggleFavoriteStream,
-  showStream,
-  showStreamAIContext,
-  addCardToStream,
-  removeCardFromStream,
-  moveCardInStream,
-  searchCards,
-  duplicateStream,
-  getStreamStats,
-  getStreamAnalytics
-};
+      const user = await getCurrentUser();
+      const brain = await Brain.findByUserAndName(user.id, options.brain);
+      if (!brain) {
+        throw new Error(`Brain '${options.brain}' not found`);
+      }
+
+      const stream = await Stream.findByBrainAndName(brain.id, title);
+      if (!stream) {
+        throw new Error(`Stream '${title}' not found in brain '${options.brain}'`);
+      }
+
+      const streamCards = await StreamCard.findByStreamId(stream.id);
+      
+      if (options.json) {
+        console.log(JSON.stringify({ stream, cards: streamCards }, null, 2));
+      } else {
+        console.log(chalk.green(`📄 Stream: ${stream.title}`));
+        console.log(`   Brain: ${options.brain}`);
+        console.log(`   Favorited: ${stream.isFavorited ? '⭐ Yes' : 'No'}`);
+        console.log(`   Created: ${new Date(stream.createdAt).toLocaleDateString()}`);
+        console.log(`   Last Accessed: ${new Date(stream.lastAccessedAt).toLocaleDateString()}`);
+        console.log(`   Cards: ${streamCards.length}`);
+
+        if (streamCards.length > 0) {
+          console.log(chalk.green('\n📝 Cards:'));
+          console.log(formatTable(streamCards.map((sc, index) => ({
+            Position: index + 1,
+            Title: sc.card?.title || 'Unknown',
+            'AI Context': sc.isInAIContext ? '🤖' : '',
+            Collapsed: sc.isCollapsed ? '📁' : '📂'
+          }))));
+        }
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ Error showing stream:'), error.message);
+      process.exit(1);
+    }
+  });
+
+/**
+ * Toggle favorite status
+ */
+streamsCommand
+  .command('favorite')
+  .description('Toggle favorite status of a stream')
+  .argument('<title>', 'Stream title')
+  .option('-b, --brain <name>', 'Brain name (required)')
+  .action(async (title, options) => {
+    try {
+      if (!options.brain) {
+        console.error(chalk.red('❌ Brain name is required. Use -b or --brain option.'));
+        process.exit(1);
+      }
+
+      const user = await getCurrentUser();
+      const brain = await Brain.findByUserAndName(user.id, options.brain);
+      if (!brain) {
+        throw new Error(`Brain '${options.brain}' not found`);
+      }
+
+      const stream = await Stream.findByBrainAndName(brain.id, title);
+      if (!stream) {
+        throw new Error(`Stream '${title}' not found in brain '${options.brain}'`);
+      }
+
+      const newFavoriteStatus = !stream.isFavorited;
+      await Stream.update(stream.id, { isFavorited: newFavoriteStatus });
+      
+      const status = newFavoriteStatus ? 'favorited' : 'unfavorited';
+      const icon = newFavoriteStatus ? '⭐' : '';
+      console.log(chalk.green(`✅ Stream '${title}' ${status} ${icon}`));
+    } catch (error) {
+      console.error(chalk.red('❌ Error toggling favorite:'), error.message);
+      process.exit(1);
+    }
+  });
+
+module.exports = streamsCommand;

@@ -66,21 +66,16 @@ class CardProcessor {
   }
 
   /**
-   * Generate unique card title within brain
+   * Check if card title is unique within brain
    * @param {string} brainId - Brain ID
-   * @param {string} baseTitle - Base title to make unique
-   * @returns {Promise<string>} - Unique title
+   * @param {string} title - Title to check
+   * @throws {Error} - If title already exists
    */
-  async generateUniqueTitle(brainId, baseTitle) {
-    let title = baseTitle;
-    let counter = 1;
-
-    while (await Card.findByBrainAndTitle(brainId, title)) {
-      title = `${baseTitle} (${counter})`;
-      counter++;
+  async checkTitleUnique(brainId, title) {
+    const existingCard = await Card.findByBrainAndTitle(brainId, title);
+    if (existingCard) {
+      throw new Error(`A card with the title "${title}" already exists in this brain`);
     }
-
-    return title;
   }
 
   /**
@@ -470,11 +465,11 @@ class CardProcessor {
         throw new Error('Brain not found');
       }
 
-      // Generate unique title
-      const uniqueTitle = await this.generateUniqueTitle(brainId, title);
+      // Check title uniqueness
+      await this.checkTitleUnique(brainId, title);
       
       // Create card
-      const card = await Card.create(brainId, uniqueTitle, {
+      const card = await Card.create(brainId, title, {
         content: content || ''
       });
 

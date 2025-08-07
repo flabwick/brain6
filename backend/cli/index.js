@@ -14,6 +14,7 @@ const { formatTable, formatJson, colorize } = require('./utils/formatting');
 const adminCommands = require('./commands/admin');
 const brainCommands = require('./commands/brains');
 const cardCommands = require('./commands/cards');
+const streamCommands = require('./commands/streams');
 const syncCommands = require('./commands/sync');
 
 const program = new Command();
@@ -269,6 +270,9 @@ brains
 
 // Card commands
 program.addCommand(cardCommands);
+
+// Stream commands
+program.addCommand(streamCommands);
 
 // Sync commands
 program

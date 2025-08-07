@@ -55,9 +55,13 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use(cors({
-  origin: ['http://localhost:4201', 'http://localhost:3000'],
+  origin: [
+    'https://dev.jimboslice.xyz',
+    'http://localhost:3000',
+    'http://localhost:4201'
+  ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID']
 }));
 
