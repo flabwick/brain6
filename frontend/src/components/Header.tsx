@@ -7,7 +7,7 @@ import api from '../services/api';
 interface HeaderProps {
   onBrainSelect: (brain: Brain) => void;
   onStreamSelect: (stream: Stream) => void;
-  onNewStream: () => void;
+  onNewStream: () => Promise<void>;
 }
 
 const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStream }) => {
@@ -32,11 +32,11 @@ const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStr
     try {
       setIsLoadingBrains(true);
       const response = await api.get('/brains');
-      setBrains(response.data.data || []);
+      setBrains(response.data.brains || []);
       
       // Auto-select first brain if none selected
-      if (!selectedBrain && response.data.data?.length > 0) {
-        onBrainSelect(response.data.data[0]);
+      if (!selectedBrain && response.data.brains?.length > 0) {
+        onBrainSelect(response.data.brains[0]);
       }
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to load brains';
@@ -50,13 +50,15 @@ const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStr
     try {
       setIsLoadingStreams(true);
       const response = await api.get(`/streams?brainId=${brainId}`);
-      setStreams(response.data.data || []);
+      
+      setStreams(response.data.streams || []);
       
       // Auto-select first stream if none selected
-      if (!currentStream && response.data.data?.length > 0) {
-        onStreamSelect(response.data.data[0]);
+      if (!currentStream && response.data.streams?.length > 0) {
+        onStreamSelect(response.data.streams[0]);
       }
     } catch (err: any) {
+      console.error('Failed to load streams:', err);
       const errorMessage = err.response?.data?.message || 'Failed to load streams';
       setError(errorMessage);
     } finally {
@@ -69,6 +71,7 @@ const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStr
       await logout();
     }
   };
+
 
   return (
     <header className="app-header">
@@ -96,7 +99,7 @@ const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStr
             ) : (
               brains.map(brain => (
                 <option key={brain.id} value={brain.id}>
-                  {brain.title}
+                  {(brain as any).name || brain.title}
                 </option>
               ))
             )}
@@ -126,7 +129,7 @@ const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStr
             ) : (
               streams.map(stream => (
                 <option key={stream.id} value={stream.id}>
-                  {stream.title}
+                  {(stream as any).name || stream.title}
                 </option>
               ))
             )}
@@ -134,7 +137,13 @@ const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStr
         </div>
 
         <button
-          onClick={onNewStream}
+          onClick={async () => {
+            await onNewStream();
+            // Refresh streams after creating new one
+            if (selectedBrain) {
+              await loadStreams(selectedBrain.id);
+            }
+          }}
           className="btn btn-small"
           disabled={!selectedBrain}
           title="Create new stream"
@@ -147,7 +156,7 @@ const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStr
         {/* Current stream title */}
         {currentStream && (
           <h1 className="stream-title">
-            {currentStream.title}
+            {(currentStream as any).name || currentStream.title}
           </h1>
         )}
 

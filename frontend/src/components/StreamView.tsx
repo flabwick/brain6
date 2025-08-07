@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Card from './Card';
+import CardSearchInterface from './CardSearchInterface';
+import CardCreateInterface from './CardCreateInterface';
 import { Stream, StreamCard, Card as CardType } from '../types';
 import api from '../services/api';
 import { useApp } from '../contexts/AppContext';
@@ -14,8 +16,8 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
   const [streamCards, setStreamCards] = useState<StreamCard[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isAddingCard, setIsAddingCard] = useState(false);
-  const [newCardTitle, setNewCardTitle] = useState('');
+  const [showAddCardInterface, setShowAddCardInterface] = useState(false);
+  const [showCreateCardInterface, setShowCreateCardInterface] = useState(false);
   const { setError: setGlobalError } = useApp();
 
   useEffect(() => {
@@ -26,14 +28,14 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
     try {
       setIsLoading(true);
       setError(null);
-
+      
       // Load stream data
       const streamResponse = await api.get(`/streams/${streamId}`);
-      setStream(streamResponse.data.data);
+      setStream(streamResponse.data.stream);
 
       // Load stream cards
       const cardsResponse = await api.get(`/streams/${streamId}/cards`);
-      setStreamCards(cardsResponse.data.data || []);
+      setStreamCards(cardsResponse.data.cards || []);
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to load stream';
       setError(errorMessage);
@@ -47,12 +49,8 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
     try {
       await api.put(`/cards/${cardId}`, updates);
       
-      // Update the card in streamCards
-      setStreamCards(prev => prev.map(sc => 
-        sc.card?.id === cardId 
-          ? { ...sc, card: { ...sc.card, ...updates } }
-          : sc
-      ));
+      // Refresh the stream to get latest data from server
+      await loadStream();
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to update card';
       setGlobalError(errorMessage);
@@ -61,16 +59,13 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
 
   const handleDeleteCard = async (cardId: string) => {
     try {
-      // Find the stream card to remove
-      const streamCard = streamCards.find(sc => sc.card?.id === cardId);
-      if (!streamCard) return;
-
-      await api.delete(`/streams/${streamId}/cards/${streamCard.id}`);
+      // Remove card from stream (card remains in brain)
+      await api.delete(`/streams/${streamId}/cards/${cardId}`);
       
-      // Remove from local state
-      setStreamCards(prev => prev.filter(sc => sc.card?.id !== cardId));
+      // Refresh the stream to reflect the removal
+      await loadStream();
     } catch (err: any) {
-      const errorMessage = err.response?.data?.message || 'Failed to delete card';
+      const errorMessage = err.response?.data?.message || 'Failed to remove card from stream';
       setGlobalError(errorMessage);
     }
   };
@@ -86,64 +81,50 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
         isCollapsed: newCollapsedState
       });
 
-      // Update local state
-      setStreamCards(prev => prev.map(sc => 
-        sc.id === streamCardId 
-          ? { ...sc, isCollapsed: newCollapsedState }
-          : sc
-      ));
+      // Refresh the stream to reflect the collapse state change
+      await loadStream();
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to toggle card collapse';
       setGlobalError(errorMessage);
     }
   };
 
-  const handleAddCard = async () => {
-    if (!newCardTitle.trim()) return;
-
+  const handleAddExistingCard = async (cardId: string) => {
     try {
-      setIsAddingCard(true);
-
-      // Create the card
-      const cardResponse = await api.post('/cards', {
-        title: newCardTitle.trim(),
-        content: '',
-        brainId: brainId
-      });
-
-      const newCard = cardResponse.data.data;
-
-      // Add card to stream
-      const streamCardResponse = await api.post(`/streams/${streamId}/cards`, {
-        cardId: newCard.id,
+      // Add existing card to stream
+      await api.post(`/streams/${streamId}/cards`, {
+        cardId: cardId,
         position: streamCards.length,
         isInAIContext: false,
         isCollapsed: false
       });
 
-      const newStreamCard = streamCardResponse.data.data;
-      newStreamCard.card = newCard;
-
-      // Update local state
-      setStreamCards(prev => [...prev, newStreamCard]);
-      setNewCardTitle('');
+      // Refresh the stream to show the newly added card
+      await loadStream();
     } catch (err: any) {
-      const errorMessage = err.response?.data?.message || 'Failed to add card';
+      const errorMessage = err.response?.data?.message || 'Failed to add card to stream';
       setGlobalError(errorMessage);
-    } finally {
-      setIsAddingCard(false);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleAddCard();
-    }
-    if (e.key === 'Escape') {
-      setNewCardTitle('');
+  const handleAddNewCard = async (card: CardType) => {
+    try {
+      // Add newly created card to stream
+      await api.post(`/streams/${streamId}/cards`, {
+        cardId: card.id,
+        position: streamCards.length,
+        isInAIContext: false,
+        isCollapsed: false
+      });
+
+      // Refresh the stream to show the newly created card
+      await loadStream();
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to add card to stream';
+      setGlobalError(errorMessage);
     }
   };
+
 
   if (isLoading) {
     return (
@@ -182,63 +163,114 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
     );
   }
 
+
+  const handleRefreshStream = async () => {
+    await loadStream();
+  };
+
   return (
     <div className="stream-view">
-      {/* Stream cards */}
-      {streamCards.map((streamCard) => (
-        streamCard.card && (
-          <Card
-            key={streamCard.id}
-            card={streamCard.card}
-            streamCard={streamCard}
-            streamId={streamId}
-            onUpdate={handleUpdateCard}
-            onDelete={handleDeleteCard}
-            onToggleCollapse={handleToggleCollapse}
-          />
-        )
-      ))}
-
-      {/* Add new card interface */}
-      <div className="card" style={{ borderStyle: 'dashed', opacity: 0.7 }}>
-        <div className="form-group">
-          <input
-            type="text"
-            value={newCardTitle}
-            onChange={(e) => setNewCardTitle(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="form-input"
-            placeholder="Enter card title and press Enter..."
-            disabled={isAddingCard}
-          />
+      {/* Stream header with refresh button */}
+      <div className="stream-header" style={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center',
+        marginBottom: '1rem',
+        padding: '0.5rem 0',
+        borderBottom: '1px solid #e5e7eb'
+      }}>
+        <div style={{ color: '#6b7280', fontSize: '14px' }}>
+          {streamCards.length} card{streamCards.length !== 1 ? 's' : ''} in stream
         </div>
-        <div className="flex gap-sm">
-          <button
-            onClick={handleAddCard}
-            className="btn btn-primary btn-small"
-            disabled={!newCardTitle.trim() || isAddingCard}
-          >
-            {isAddingCard ? (
-              <>
-                <span className="loading-spinner" />
-                Adding...
-              </>
-            ) : (
-              'Add Card'
-            )}
-          </button>
-          {newCardTitle && (
-            <button
-              onClick={() => setNewCardTitle('')}
-              className="btn btn-small"
-            >
-              Cancel
-            </button>
+        <button
+          onClick={handleRefreshStream}
+          className="btn btn-small"
+          disabled={isLoading}
+          title="Refresh stream to see latest changes"
+          style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+        >
+          {isLoading ? (
+            <>
+              <span className="loading-spinner" style={{ width: '12px', height: '12px' }} />
+              Loading...
+            </>
+          ) : (
+            <>
+              🔄 Refresh
+            </>
           )}
-        </div>
+        </button>
       </div>
 
-      {streamCards.length === 0 && !newCardTitle && (
+      {/* Stream cards */}
+      {streamCards.map((streamCard) => (
+        <Card
+          key={streamCard.id}
+          card={streamCard}
+          streamCard={streamCard}  
+          streamId={streamId}
+          onUpdate={handleUpdateCard}
+          onDelete={handleDeleteCard}
+          onToggleCollapse={handleToggleCollapse}
+        />
+      ))}
+
+      {/* Card Search Interface */}
+      {showAddCardInterface && (
+        <CardSearchInterface
+          brainId={brainId}
+          streamId={streamId}
+          streamCards={streamCards}
+          onCardSelected={(card) => {
+            // Add existing card to stream
+            handleAddExistingCard(card.id);
+            setShowAddCardInterface(false);
+          }}
+          onCancel={() => setShowAddCardInterface(false)}
+        />
+      )}
+
+      {/* Card Creation Interface */}
+      {showCreateCardInterface && (
+        <CardCreateInterface
+          brainId={brainId}
+          onCardCreated={(card) => {
+            // Add newly created card to stream
+            handleAddNewCard(card);
+            setShowCreateCardInterface(false);
+          }}
+          onCancel={() => setShowCreateCardInterface(false)}
+        />
+      )}
+
+      {/* Add/Create Card Buttons */}
+      {!showAddCardInterface && !showCreateCardInterface && (
+        <div className="card" style={{ borderStyle: 'dashed', opacity: 0.7 }}>
+          <div className="text-center" style={{ padding: '1rem' }}>
+            <div style={{ marginBottom: '1rem', color: '#6b7280', fontSize: '14px' }}>
+              Cards belong to the brain. Add existing cards to this stream or create new ones.
+            </div>
+            <div className="flex gap-md justify-center">
+              <button
+                onClick={() => setShowAddCardInterface(true)}
+                className="btn btn-primary"
+                title="Add an existing card from this brain to this stream"
+              >
+                Add Card to Stream
+              </button>
+              <button
+                onClick={() => setShowCreateCardInterface(true)}
+                className="btn btn-secondary"
+                title="Create a new card in this brain and add it to this stream"
+              >
+                Create New Card
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {streamCards.length === 0 && !showAddCardInterface && !showCreateCardInterface && (
         <div className="text-center" style={{ padding: '2rem', color: '#6b7280' }}>
           <p>This stream is empty.</p>
           <p>Add your first card above to get started.</p>

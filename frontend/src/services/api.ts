@@ -26,10 +26,8 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    if (error.response?.status === 401) {
-      // Handle unauthorized access
-      window.location.href = '/login';
-    }
+    // Don't redirect on 401 - let components handle authentication state
+    // The AuthContext will manage redirects based on authentication status
     return Promise.reject(error);
   }
 );

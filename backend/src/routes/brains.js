@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Brain = require('../models/Brain');
+const Card = require('../models/Card');
 const { requireAuth } = require('../middleware/auth');
 const { validateBrainName } = require('../utils/fileSystem');
 const { recreateWelcomeStream } = require('../services/welcomeContent');
@@ -198,6 +199,64 @@ router.get('/:id/cards', async (req, res) => {
     res.status(500).json({
       error: 'Failed to retrieve cards',
       message: 'An error occurred while fetching brain cards'
+    });
+  }
+});
+
+/**
+ * GET /api/brains/:id/cards/check-title
+ * Check if a card title exists in the brain
+ */
+router.get('/:id/cards/check-title', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title } = req.query;
+    
+    // Validate UUID format
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'Brain ID must be a valid UUID'
+      });
+    }
+
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({
+        error: 'Invalid title',
+        message: 'Title parameter is required'
+      });
+    }
+
+    const brain = await Brain.findById(id);
+    
+    if (!brain) {
+      return res.status(404).json({
+        error: 'Brain not found',
+        message: 'The requested brain does not exist'
+      });
+    }
+
+    // Check ownership
+    if (brain.userId !== req.session.userId) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'You do not have permission to access this brain'
+      });
+    }
+
+    // Check if card with this title exists
+    const existingCard = await Card.findByBrainAndTitle(id, title.trim());
+
+    res.json({
+      exists: !!existingCard,
+      title: title.trim()
+    });
+
+  } catch (error) {
+    console.error('❌ Check title error:', error);
+    res.status(500).json({
+      error: 'Failed to check title',
+      message: 'An error occurred while checking card title'
     });
   }
 });

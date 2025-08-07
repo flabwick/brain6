@@ -25,7 +25,7 @@ const Card: React.FC<CardProps> = ({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingContent, setIsEditingContent] = useState(false);
   const [editTitle, setEditTitle] = useState(card.title);
-  const [editContent, setEditContent] = useState(card.content || '');
+  const [editContent, setEditContent] = useState(card.content || card.contentPreview || '');
   const { aiContextCards, toggleAIContext } = useApp();
 
   const isInAIContext = aiContextCards.includes(card.id);
@@ -33,8 +33,8 @@ const Card: React.FC<CardProps> = ({
 
   useEffect(() => {
     setEditTitle(card.title);
-    setEditContent(card.content || '');
-  }, [card.title, card.content]);
+    setEditContent(card.content || card.contentPreview || '');
+  }, [card.title, card.content, card.contentPreview]);
 
   const handleTitleSubmit = async () => {
     if (editTitle.trim() !== card.title) {
@@ -53,7 +53,8 @@ const Card: React.FC<CardProps> = ({
   };
 
   const handleContentSubmit = async () => {
-    if (editContent !== card.content) {
+    const currentContent = card.content || card.contentPreview || '';
+    if (editContent !== currentContent) {
       await onUpdate(card.id, { content: editContent });
     }
     setIsEditingContent(false);
@@ -61,7 +62,7 @@ const Card: React.FC<CardProps> = ({
 
   const handleContentKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      setEditContent(card.content || '');
+      setEditContent(card.content || card.contentPreview || '');
       setIsEditingContent(false);
     }
     // Ctrl+S to save
@@ -140,13 +141,16 @@ const Card: React.FC<CardProps> = ({
             className="btn btn-small"
             onClick={(e) => {
               e.stopPropagation();
-              if (window.confirm('Delete this card from the stream?')) {
-                onDelete(card.id);
-              }
+              onDelete(card.id);
             }}
-            title="Delete card"
+            title="Remove card from stream"
+            style={{ 
+              color: '#ef4444',
+              fontWeight: 'bold',
+              fontSize: '16px'
+            }}
           >
-            Del
+            ×
           </button>
           
           <button
@@ -185,7 +189,7 @@ const Card: React.FC<CardProps> = ({
                   type="button"
                   className="btn btn-small"
                   onClick={() => {
-                    setEditContent(card.content || '');
+                    setEditContent(card.content || card.contentPreview || '');
                     setIsEditingContent(false);
                   }}
                 >
@@ -198,8 +202,8 @@ const Card: React.FC<CardProps> = ({
               className="card-content-display"
               onDoubleClick={() => setIsEditingContent(true)}
             >
-              {card.content ? (
-                <ReactMarkdown>{card.content}</ReactMarkdown>
+              {(card.content || card.contentPreview) ? (
+                <ReactMarkdown>{card.content || card.contentPreview}</ReactMarkdown>
               ) : (
                 <p style={{ color: '#6b7280', fontStyle: 'italic' }}>
                   No content yet. Double-click to add content.
