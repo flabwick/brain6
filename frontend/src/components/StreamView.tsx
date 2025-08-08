@@ -16,8 +16,8 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
   const [streamCards, setStreamCards] = useState<StreamCard[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showAddCardInterface, setShowAddCardInterface] = useState(false);
-  const [showCreateCardInterface, setShowCreateCardInterface] = useState(false);
+  const [activeCardIdForAdd, setActiveCardIdForAdd] = useState<string | null>(null);
+  const [activeCardIdForCreate, setActiveCardIdForCreate] = useState<string | null>(null);
   const { setError: setGlobalError } = useApp();
 
   useEffect(() => {
@@ -89,17 +89,107 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
     }
   };
 
-  const handleAddExistingCard = async (cardId: string) => {
+
+  // Position management functions
+  const handleAddCardBelow = (afterPosition: number) => {
+    const cardAtPosition = streamCards.find(sc => sc.position === afterPosition);
+    if (cardAtPosition) {
+      setActiveCardIdForAdd(cardAtPosition.cardId || cardAtPosition.id || '');
+      setActiveCardIdForCreate(null); // Close any create interface
+    }
+  };
+
+  const handleCreateCardBelow = (afterPosition: number) => {
+    const cardAtPosition = streamCards.find(sc => sc.position === afterPosition);
+    if (cardAtPosition) {
+      setActiveCardIdForCreate(cardAtPosition.cardId || cardAtPosition.id || '');
+      setActiveCardIdForAdd(null); // Close any add interface
+    }
+  };
+
+  const handleMoveUp = async (cardId: string) => {
     try {
-      // Add existing card to stream
-      await api.post(`/streams/${streamId}/cards`, {
+      const currentIndex = streamCards.findIndex(sc => (sc.cardId || sc.id) === cardId);
+      if (currentIndex <= 0) return; // Already at top
+
+      const currentCard = streamCards[currentIndex];
+      const targetCard = streamCards[currentIndex - 1];
+
+      // Swap positions: use negative temp position to avoid validation limits
+      const tempPosition = -1;
+
+      // First move current card to temp position
+      await api.put(`/streams/${streamId}/cards/${cardId}`, {
+        position: tempPosition
+      });
+
+      // Move target card to current card's position
+      await api.put(`/streams/${streamId}/cards/${targetCard.cardId || targetCard.id}`, {
+        position: currentCard.position
+      });
+
+      // Move current card to target card's position
+      await api.put(`/streams/${streamId}/cards/${cardId}`, {
+        position: targetCard.position
+      });
+
+      await loadStream();
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to move card';
+      setGlobalError(errorMessage);
+    }
+  };
+
+  const handleMoveDown = async (cardId: string) => {
+    try {
+      const currentIndex = streamCards.findIndex(sc => (sc.cardId || sc.id) === cardId);
+      if (currentIndex >= streamCards.length - 1) return; // Already at bottom
+
+      const currentCard = streamCards[currentIndex];
+      const targetCard = streamCards[currentIndex + 1];
+
+      // Swap positions: use negative temp position to avoid validation limits
+      const tempPosition = -1;
+
+      // First move current card to temp position
+      await api.put(`/streams/${streamId}/cards/${cardId}`, {
+        position: tempPosition
+      });
+
+      // Move target card to current card's position
+      await api.put(`/streams/${streamId}/cards/${targetCard.cardId || targetCard.id}`, {
+        position: currentCard.position
+      });
+
+      // Move current card to target card's position
+      await api.put(`/streams/${streamId}/cards/${cardId}`, {
+        position: targetCard.position
+      });
+
+      await loadStream();
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to move card';
+      setGlobalError(errorMessage);
+    }
+  };
+
+  // Inline interface handlers
+  const handleInlineAddCard = async (cardId: string, insertAfterPosition: number | null) => {
+    try {
+      const requestBody: any = {
         cardId: cardId,
-        position: streamCards.length,
         isInAIContext: false,
         isCollapsed: false
-      });
+      };
+      
+      // Only add position if it's not null (null means add at end)
+      if (insertAfterPosition !== null) {
+        requestBody.position = insertAfterPosition;
+      }
 
-      // Refresh the stream to show the newly added card
+      await api.post(`/streams/${streamId}/cards`, requestBody);
+
+      setActiveCardIdForAdd(null);
       await loadStream();
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to add card to stream';
@@ -107,17 +197,22 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
     }
   };
 
-  const handleAddNewCard = async (card: CardType) => {
+  const handleInlineCreateCard = async (card: CardType, insertAfterPosition: number | null) => {
     try {
-      // Add newly created card to stream
-      await api.post(`/streams/${streamId}/cards`, {
+      const requestBody: any = {
         cardId: card.id,
-        position: streamCards.length,
         isInAIContext: false,
         isCollapsed: false
-      });
+      };
+      
+      // Only add position if it's not null (null means add at end)
+      if (insertAfterPosition !== null) {
+        requestBody.position = insertAfterPosition;
+      }
 
-      // Refresh the stream to show the newly created card
+      await api.post(`/streams/${streamId}/cards`, requestBody);
+
+      setActiveCardIdForCreate(null);
       await loadStream();
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to add card to stream';
@@ -125,6 +220,13 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
     }
   };
 
+  const handleCancelAdd = () => {
+    setActiveCardIdForAdd(null);
+  };
+
+  const handleCancelCreate = () => {
+    setActiveCardIdForCreate(null);
+  };
 
   if (isLoading) {
     return (
@@ -203,78 +305,74 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
       </div>
 
       {/* Stream cards */}
-      {streamCards.map((streamCard) => (
-        <Card
-          key={streamCard.cardId || streamCard.id}
-          card={streamCard as any} // StreamCard contains all Card properties
-          streamCard={streamCard}  
-          streamId={streamId}
-          onUpdate={handleUpdateCard}
-          onDelete={handleDeleteCard}
-          onToggleCollapse={handleToggleCollapse}
-        />
-      ))}
+      {streamCards.map((streamCard, index) => {
+        const cardId = streamCard.cardId || streamCard.id || '';
+        return (
+          <Card
+            key={cardId}
+            card={streamCard as any} // StreamCard contains all Card properties
+            streamCard={streamCard}  
+            streamId={streamId}
+            brainId={brainId}
+            onUpdate={handleUpdateCard}
+            onDelete={handleDeleteCard}
+            onToggleCollapse={handleToggleCollapse}
+            onAddCardBelow={handleAddCardBelow}
+            onCreateCardBelow={handleCreateCardBelow}
+            onMoveUp={handleMoveUp}
+            onMoveDown={handleMoveDown}
+            isFirst={index === 0}
+            isLast={index === streamCards.length - 1}
+            showAddInterface={activeCardIdForAdd === cardId}
+            showCreateInterface={activeCardIdForCreate === cardId}
+            onAddCard={handleInlineAddCard}
+            onCreateCard={handleInlineCreateCard}
+            onCancelAdd={handleCancelAdd}
+            onCancelCreate={handleCancelCreate}
+          />
+        );
+      })}
 
-      {/* Card Search Interface */}
-      {showAddCardInterface && (
-        <CardSearchInterface
-          brainId={brainId}
-          streamId={streamId}
-          streamCards={streamCards}
-          onCardSelected={(card) => {
-            // Add existing card to stream
-            handleAddExistingCard(card.id);
-            setShowAddCardInterface(false);
-          }}
-          onCancel={() => setShowAddCardInterface(false)}
-        />
-      )}
 
-      {/* Card Creation Interface */}
-      {showCreateCardInterface && (
-        <CardCreateInterface
-          brainId={brainId}
-          onCardCreated={(card) => {
-            // Add newly created card to stream
-            handleAddNewCard(card);
-            setShowCreateCardInterface(false);
-          }}
-          onCancel={() => setShowCreateCardInterface(false)}
-        />
-      )}
-
-      {/* Add/Create Card Buttons */}
-      {!showAddCardInterface && !showCreateCardInterface && (
-        <div className="card" style={{ borderStyle: 'dashed', opacity: 0.7 }}>
-          <div className="text-center" style={{ padding: '1rem' }}>
-            <div style={{ marginBottom: '1rem', color: '#6b7280', fontSize: '14px' }}>
-              Cards belong to the brain. Add existing cards to this stream or create new ones.
-            </div>
-            <div className="flex gap-md justify-center">
-              <button
-                onClick={() => setShowAddCardInterface(true)}
-                className="btn btn-primary"
-                title="Add an existing card from this brain to this stream"
-              >
-                Add Card to Stream
-              </button>
-              <button
-                onClick={() => setShowCreateCardInterface(true)}
-                className="btn btn-secondary"
-                title="Create a new card in this brain and add it to this stream"
-              >
-                Create New Card
-              </button>
-            </div>
+      {streamCards.length === 0 && (
+        <div className="text-center" style={{ padding: '2rem', color: '#6b7280' }}>
+          <p>This stream is empty.</p>
+          <div className="flex gap-md justify-center" style={{ marginTop: '1rem' }}>
+            <button
+              onClick={() => setActiveCardIdForAdd('empty-stream')}
+              className="btn btn-primary btn-small"
+              title="Add an existing card from this brain"
+            >
+              📎 Add Card
+            </button>
+            <button
+              onClick={() => setActiveCardIdForCreate('empty-stream')}
+              className="btn btn-secondary btn-small"
+              title="Create a new card in this brain"
+            >
+              ✨ Create Card
+            </button>
           </div>
         </div>
       )}
-
-      {streamCards.length === 0 && !showAddCardInterface && !showCreateCardInterface && (
-        <div className="text-center" style={{ padding: '2rem', color: '#6b7280' }}>
-          <p>This stream is empty.</p>
-          <p>Add your first card above to get started.</p>
-        </div>
+      
+      {/* Empty stream interfaces */}
+      {streamCards.length === 0 && activeCardIdForAdd === 'empty-stream' && (
+        <CardSearchInterface
+          brainId={brainId}
+          streamId={streamId}
+          streamCards={[]}
+          onCardSelected={(card) => handleInlineAddCard(card.id, null)}
+          onCancel={handleCancelAdd}
+        />
+      )}
+      
+      {streamCards.length === 0 && activeCardIdForCreate === 'empty-stream' && (
+        <CardCreateInterface
+          brainId={brainId}
+          onCardCreated={(card) => handleInlineCreateCard(card, null)}
+          onCancel={handleCancelCreate}
+        />
       )}
     </div>
   );

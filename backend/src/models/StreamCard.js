@@ -70,11 +70,38 @@ class StreamCard {
         position = maxPositionResult.rows[0].max_position + 1;
       }
 
+      // Debug: Check current positions before shifting
+      const beforeShift = await client.query(
+        'SELECT card_id, position FROM stream_cards WHERE stream_id = $1 ORDER BY position',
+        [streamId]
+      );
+      console.log(`🔍 Before shift - Stream positions:`, beforeShift.rows.map(r => `${r.card_id.substring(0,8)}:${r.position}`));
+      console.log(`🎯 Inserting card ${cardId.substring(0,8)} at position ${position}`);
+
       // Shift existing cards at this position and after to make room
-      await client.query(
-        'UPDATE stream_cards SET position = position + 1 WHERE stream_id = $1 AND position >= $2',
+      // Get cards that need to be shifted (in reverse order to avoid conflicts)
+      const cardsToShift = await client.query(
+        'SELECT id, position FROM stream_cards WHERE stream_id = $1 AND position >= $2 ORDER BY position DESC',
         [streamId, position]
       );
+      
+      // Shift each card individually from highest position to lowest
+      let shiftedCount = 0;
+      for (const cardToShift of cardsToShift.rows) {
+        await client.query(
+          'UPDATE stream_cards SET position = $1 WHERE id = $2',
+          [cardToShift.position + 1, cardToShift.id]
+        );
+        shiftedCount++;
+      }
+      console.log(`📊 Shifted ${shiftedCount} cards up by 1 from position ${position}`);
+
+      // Debug: Check positions after shifting
+      const afterShift = await client.query(
+        'SELECT card_id, position FROM stream_cards WHERE stream_id = $1 ORDER BY position',
+        [streamId]
+      );
+      console.log(`🔍 After shift - Stream positions:`, afterShift.rows.map(r => `${r.card_id.substring(0,8)}:${r.position}`));
 
       // Insert the new stream_card relationship
       const result = await client.query(`
@@ -160,40 +187,69 @@ class StreamCard {
       );
       const maxPosition = maxResult.rows[0].max_position;
 
-      if (newPosition < 0 || newPosition > maxPosition) {
+      // Allow negative positions for temporary swapping, but validate non-negative positions
+      if (newPosition >= 0 && newPosition > maxPosition) {
         throw new Error(`Invalid position: ${newPosition}. Must be between 0 and ${maxPosition}`);
       }
 
-      // Complex position reordering logic
+      // Simple position reordering: first move current card to temp position, then shift others
       if (currentPosition !== newPosition) {
+        console.log(`🚀 Starting reorder: card ${cardId.substring(0,8)} from position ${currentPosition} to ${newPosition}`);
+        
+        // Step 1: Move current card to temporary position to avoid conflicts
+        await client.query(
+          'UPDATE stream_cards SET position = $1 WHERE stream_id = $2 AND card_id = $3',
+          [-9999, streamId, cardId]
+        );
+        console.log(`📦 Moved card to temporary position -9999`);
+
         if (newPosition > currentPosition) {
           // Moving down: shift cards between old and new position up
+          console.log(`⬇️  Moving down: shifting positions ${currentPosition + 1} to ${newPosition} up by 1`);
           await client.query(
             'UPDATE stream_cards SET position = position - 1 WHERE stream_id = $1 AND position > $2 AND position <= $3',
             [streamId, currentPosition, newPosition]
           );
         } else {
-          // Moving up: shift cards between new and old position down  
-          await client.query(
-            'UPDATE stream_cards SET position = position + 1 WHERE stream_id = $1 AND position >= $2 AND position < $3',
+          // Moving up: shift cards between new and old position down
+          console.log(`⬆️  Moving up: shifting positions ${newPosition} to ${currentPosition - 1} down by 1`);
+          
+          // Get cards that need to be shifted down (in reverse order to avoid conflicts)
+          const cardsToShift = await client.query(
+            'SELECT card_id, position FROM stream_cards WHERE stream_id = $1 AND position >= $2 AND position < $3 ORDER BY position DESC',
             [streamId, newPosition, currentPosition]
           );
+          
+          console.log(`📋 Cards to shift: ${cardsToShift.rows.map(r => `${r.card_id.substring(0,8)}:${r.position}`).join(', ')}`);
+          
+          // Shift each card individually from highest position to lowest
+          for (const cardToShift of cardsToShift.rows) {
+            await client.query(
+              'UPDATE stream_cards SET position = $1 WHERE stream_id = $2 AND card_id = $3',
+              [cardToShift.position + 1, streamId, cardToShift.card_id]
+            );
+            console.log(`📍 Shifted card ${cardToShift.card_id.substring(0,8)} from ${cardToShift.position} to ${cardToShift.position + 1}`);
+          }
         }
+
+        // Step 2: Move current card to final position
+        await client.query(
+          'UPDATE stream_cards SET position = $1 WHERE stream_id = $2 AND card_id = $3',
+          [newPosition, streamId, cardId]
+        );
+        
+        console.log(`🔄 Reordered card ${cardId} from position ${currentPosition} to ${newPosition}`);
+        return true;
       }
 
-      // Update the card's position and optionally depth
-      const updateFields = ['position = $3'];
-      const updateValues = [streamId, cardId, newPosition];
-      
+      // Update depth if provided (position was already updated above)
       if (newDepth !== null) {
-        updateFields.push('depth = $4');
-        updateValues.push(newDepth);
+        await client.query(
+          'UPDATE stream_cards SET depth = $1 WHERE stream_id = $2 AND card_id = $3',
+          [newDepth, streamId, cardId]
+        );
+        console.log(`📏 Updated card ${cardId} depth to ${newDepth}`);
       }
-
-      await client.query(`
-        UPDATE stream_cards SET ${updateFields.join(', ')} 
-        WHERE stream_id = $1 AND card_id = $2
-      `, updateValues);
 
       console.log(`✅ Reordered card ${cardId} in stream ${streamId} to position ${newPosition}`);
       return true;

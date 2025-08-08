@@ -4,10 +4,9 @@ import { useAuth } from '../contexts/AuthContext';
 
 interface CommandBarProps {
   streamId?: string;
-  onAddCard?: () => void;
 }
 
-const CommandBar: React.FC<CommandBarProps> = ({ streamId, onAddCard }) => {
+const CommandBar: React.FC<CommandBarProps> = ({ streamId }) => {
   const { aiContextCards, clearAIContext, currentStream } = useApp();
   const { user } = useAuth();
 
@@ -20,22 +19,6 @@ const CommandBar: React.FC<CommandBarProps> = ({ streamId, onAddCard }) => {
         {/* Stream actions */}
         {streamId && (
           <>
-            <button
-              onClick={onAddCard}
-              className="btn btn-primary btn-small"
-              title="Add new card (Ctrl+N)"
-            >
-              + Add Card
-            </button>
-            
-            <button
-              className="btn btn-small"
-              disabled
-              title="AI Generate (coming soon)"
-            >
-              AI Generate
-            </button>
-
             <button
               className="btn btn-small"
               disabled

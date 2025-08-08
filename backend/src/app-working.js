@@ -143,10 +143,15 @@ app.get('/api/system/version', (req, res) => {
 
 // Application routes AFTER system endpoints
 try {
+  console.log('📚 Loading application routes...');
   app.use('/api/auth', require('./routes/auth'));
+  console.log('✅ Auth routes loaded');
   app.use('/api/brains', require('./routes/brains'));
+  console.log('✅ Brain routes loaded');
   app.use('/api/cards', require('./routes/cards'));
+  console.log('✅ Card routes loaded');
   app.use('/api/streams', require('./routes/streams'));
+  console.log('✅ Stream routes loaded');
 } catch (error) {
   console.error('❌ Error loading routes:', error);
   throw error;

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import './App.css';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AppProvider, useApp } from './contexts/AppContext';
@@ -12,33 +12,6 @@ import api from './services/api';
 const AppContent: React.FC = () => {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const { selectedBrain, currentStream, setBrain, setStream, setError } = useApp();
-  const addCardRef = useRef<(() => void) | null>(null);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Only handle shortcuts when not in input/textarea
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        return;
-      }
-
-      if (e.ctrlKey || e.metaKey) {
-        switch (e.key) {
-          case 'n':
-            e.preventDefault();
-            if (addCardRef.current) {
-              addCardRef.current();
-            }
-            break;
-          default:
-            break;
-        }
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   const handleBrainSelect = (brain: Brain) => {
     setBrain(brain);
@@ -70,19 +43,6 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const handleAddCard = () => {
-    // This will be called by keyboard shortcut
-    // The actual add card functionality is handled in StreamView
-    const addCardInput = document.querySelector('input[placeholder*="Enter card title"]') as HTMLInputElement;
-    if (addCardInput) {
-      addCardInput.focus();
-    }
-  };
-
-  // Set up the ref for keyboard shortcuts
-  useEffect(() => {
-    addCardRef.current = handleAddCard;
-  }, []);
 
   if (authLoading) {
     return (
@@ -145,7 +105,6 @@ const AppContent: React.FC = () => {
 
       <CommandBar
         streamId={currentStream?.id}
-        onAddCard={handleAddCard}
       />
     </div>
   );
