@@ -212,11 +212,12 @@ const Card: React.FC<CardProps> = ({
               const content = await loadFullContent();
               setEditContent(content);
               setIsEditingContent(true);
+              setIsEditingTitle(true);
             }}
             disabled={isLoadingContent}
-            title="Edit content"
+            title="Edit card"
           >
-            {isLoadingContent ? 'Loading...' : 'Edit'}
+            {isLoadingContent ? '🔄' : '✏️'}
           </button>
           
           <button
