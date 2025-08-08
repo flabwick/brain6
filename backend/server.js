@@ -42,6 +42,15 @@ const server = app.listen(PORT, async () => {
   console.log('  GET  /api/cards/:id      - Get card');
   console.log('  PUT  /api/cards/:id      - Update card');
   console.log('  DELETE /api/cards/:id    - Delete card');
+  console.log('  GET  /api/streams        - List user streams');
+  console.log('  POST /api/streams        - Create new stream');
+  console.log('  GET  /api/streams/:id    - Get specific stream');
+  console.log('  PUT  /api/streams/:id    - Update stream');
+  console.log('  DELETE /api/streams/:id  - Delete stream');
+  console.log('  GET  /api/streams/:id/cards - Get stream cards');
+  console.log('  POST /api/streams/:id/cards - Add card to stream');
+  console.log('  PUT  /api/streams/:id/cards/:cardId - Update card in stream');
+  console.log('  DELETE /api/streams/:id/cards/:cardId - Remove card from stream');
 });
 
 // Graceful shutdown handler

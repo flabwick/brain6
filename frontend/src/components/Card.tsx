@@ -3,25 +3,53 @@ import ReactMarkdown from 'react-markdown';
 import { Card as CardType, StreamCard } from '../types';
 import { useApp } from '../contexts/AppContext';
 import api from '../services/api';
+import CardSearchInterface from './CardSearchInterface';
+import CardCreateInterface from './CardCreateInterface';
 
 interface CardProps {
   card: CardType;
   streamCard: StreamCard;
   streamId: string;
+  brainId: string;
   depth?: number;
   onUpdate: (cardId: string, updates: Partial<CardType>) => void;
   onDelete: (cardId: string) => void;
   onToggleCollapse?: (streamCardId: string) => void; // Made optional since we handle display locally now
+  onAddCardBelow?: (afterPosition: number) => void;
+  onCreateCardBelow?: (afterPosition: number) => void;
+  onMoveUp?: (cardId: string) => void;
+  onMoveDown?: (cardId: string) => void;
+  isFirst?: boolean;
+  isLast?: boolean;
+  showAddInterface?: boolean;
+  showCreateInterface?: boolean;
+  onAddCard?: (cardId: string, position: number) => void;
+  onCreateCard?: (card: CardType, position: number) => void;
+  onCancelAdd?: () => void;
+  onCancelCreate?: () => void;
 }
 
 const Card: React.FC<CardProps> = ({
   card,
   streamCard,
   streamId,
+  brainId,
   depth = 0,
   onUpdate,
   onDelete,
   onToggleCollapse,
+  onAddCardBelow,
+  onCreateCardBelow,
+  onMoveUp,
+  onMoveDown,
+  isFirst = false,
+  isLast = false,
+  showAddInterface = false,
+  showCreateInterface = false,
+  onAddCard,
+  onCreateCard,
+  onCancelAdd,
+  onCancelCreate,
 }) => {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingContent, setIsEditingContent] = useState(false);
@@ -114,10 +142,10 @@ const Card: React.FC<CardProps> = ({
   // Get the appropriate icon for current display state
   const getDisplayIcon = () => {
     switch (displayState) {
-      case 0: return '▶'; // Collapsed - right arrow
-      case 1: return '▼'; // Preview - down arrow
-      case 2: return '▲'; // Expanded - up arrow
-      default: return '▼';
+      case 0: return '›'; // Collapsed - right arrow (different symbol)
+      case 1: return '‹'; // Preview - left arrow (different symbol)
+      case 2: return '«'; // Expanded - double left arrow (different symbol)
+      default: return '‹';
     }
   };
 
@@ -207,6 +235,38 @@ const Card: React.FC<CardProps> = ({
           >
             ×
           </button>
+          
+          {/* Reordering controls */}
+          {(onMoveUp || onMoveDown) && (
+            <>
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMoveUp?.(cardId);
+                }}
+                disabled={isFirst}
+                title="Move card up"
+                style={{ opacity: isFirst ? 0.3 : 1 }}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMoveDown?.(cardId);
+                }}
+                disabled={isLast}
+                title="Move card down"
+                style={{ opacity: isLast ? 0.3 : 1 }}
+              >
+                ↓
+              </button>
+            </>
+          )}
           
           <button
             type="button"
@@ -333,6 +393,71 @@ const Card: React.FC<CardProps> = ({
             </div>
           )}
         </div>
+      )}
+      
+      {/* Card Action Buttons - Add/Create below this card */}
+      {(onAddCardBelow || onCreateCardBelow) && displayState > 0 && (
+        <div className="card-actions" style={{
+          display: 'flex',
+          gap: '8px',
+          padding: '8px 12px',
+          borderTop: '1px solid #f3f4f6',
+          backgroundColor: '#fafbfc',
+          justifyContent: 'center'
+        }}>
+          {onAddCardBelow && !showAddInterface && !showCreateInterface && (
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => onAddCardBelow(streamCard.position)}
+              title="Add existing card below this one"
+              style={{ 
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              📎 Add Card
+            </button>
+          )}
+          {onCreateCardBelow && !showAddInterface && !showCreateInterface && (
+            <button
+              type="button"
+              className="btn btn-small btn-secondary"
+              onClick={() => onCreateCardBelow(streamCard.position)}
+              title="Create new card below this one"
+              style={{ 
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              ✨ Create Card
+            </button>
+          )}
+        </div>
+      )}
+      
+      {/* Inline Card Search Interface */}
+      {showAddInterface && onAddCard && onCancelAdd && (
+        <CardSearchInterface
+          brainId={brainId}
+          streamId={streamId}
+          streamCards={[streamCard]} // Pass current stream card to avoid showing it
+          onCardSelected={(card) => onAddCard(card.id, streamCard.position)}
+          onCancel={onCancelAdd}
+        />
+      )}
+      
+      {/* Inline Card Creation Interface */}
+      {showCreateInterface && onCreateCard && onCancelCreate && (
+        <CardCreateInterface
+          brainId={brainId}
+          onCardCreated={(card) => onCreateCard(card, streamCard.position)}
+          onCancel={onCancelCreate}
+        />
       )}
     </div>
   );
