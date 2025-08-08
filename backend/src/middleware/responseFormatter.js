@@ -90,26 +90,6 @@ const responseFormatter = (req, res, next) => {
   };
 
   /**
-   * Send validation error response
-   * @param {Object} fieldErrors - Object with field names as keys and error messages as values
-   * @param {string} message - General validation error message
-   */
-  res.apiValidationError = function(fieldErrors, message = 'Validation failed') {
-    const response = {
-      success: false,
-      error: {
-        code: 'VALIDATION_ERROR',
-        message: message,
-        details: fieldErrors
-      },
-      timestamp: new Date().toISOString(),
-      requestId: requestId
-    };
-
-    return this.status(400).json(response);
-  };
-
-  /**
    * Send not found error response
    * @param {string} resource - Name of the resource that wasn't found
    * @param {string} resourceId - ID of the resource (optional)
@@ -131,91 +111,6 @@ const responseFormatter = (req, res, next) => {
     };
 
     return this.status(404).json(response);
-  };
-
-  /**
-   * Send unauthorized error response
-   * @param {string} message - Custom unauthorized message
-   */
-  res.apiUnauthorized = function(message = 'Authentication required') {
-    const response = {
-      success: false,
-      error: {
-        code: 'UNAUTHORIZED',
-        message: message
-      },
-      timestamp: new Date().toISOString(),
-      requestId: requestId
-    };
-
-    return this.status(401).json(response);
-  };
-
-  /**
-   * Send forbidden error response
-   * @param {string} message - Custom forbidden message
-   */
-  res.apiForbidden = function(message = 'Access denied') {
-    const response = {
-      success: false,
-      error: {
-        code: 'FORBIDDEN',
-        message: message
-      },
-      timestamp: new Date().toISOString(),
-      requestId: requestId
-    };
-
-    return this.status(403).json(response);
-  };
-
-  /**
-   * Send conflict error response
-   * @param {string} message - Conflict message
-   * @param {Object} details - Additional conflict details
-   */
-  res.apiConflict = function(message = 'Resource conflict', details = null) {
-    const response = {
-      success: false,
-      error: {
-        code: 'CONFLICT',
-        message: message,
-        details: details
-      },
-      timestamp: new Date().toISOString(),
-      requestId: requestId
-    };
-
-    return this.status(409).json(response);
-  };
-
-  /**
-   * Send created response (for POST requests)
-   * @param {*} data - Created resource data
-   * @param {string} message - Success message
-   */
-  res.apiCreated = function(data, message = 'Resource created successfully') {
-    return this.apiSuccess(data, message, 201);
-  };
-
-  /**
-   * Send accepted response (for async operations)
-   * @param {*} data - Response data (e.g., job ID)
-   * @param {string} message - Success message
-   */
-  res.apiAccepted = function(data, message = 'Request accepted for processing') {
-    return this.apiSuccess(data, message, 202);
-  };
-
-  /**
-   * Send no content response
-   * @param {string} message - Optional message
-   */
-  res.apiNoContent = function(message = null) {
-    if (message) {
-      return this.apiSuccess(null, message, 204);
-    }
-    return this.status(204).send();
   };
 
   next();

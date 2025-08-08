@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Card as CardType, StreamCard } from '../types';
 import { useApp } from '../contexts/AppContext';
+import api from '../services/api';
 
 interface CardProps {
   card: CardType;
@@ -10,7 +11,7 @@ interface CardProps {
   depth?: number;
   onUpdate: (cardId: string, updates: Partial<CardType>) => void;
   onDelete: (cardId: string) => void;
-  onToggleCollapse: (streamCardId: string) => void;
+  onToggleCollapse?: (streamCardId: string) => void; // Made optional since we handle display locally now
 }
 
 const Card: React.FC<CardProps> = ({
@@ -26,15 +27,43 @@ const Card: React.FC<CardProps> = ({
   const [isEditingContent, setIsEditingContent] = useState(false);
   const [editTitle, setEditTitle] = useState(card.title);
   const [editContent, setEditContent] = useState(card.content || card.contentPreview || '');
+  const [fullContent, setFullContent] = useState<string | null>(null);
+  const [isLoadingContent, setIsLoadingContent] = useState(false);
   const { aiContextCards, toggleAIContext } = useApp();
 
-  const isInAIContext = aiContextCards.includes(card.id);
-  const isCollapsed = streamCard.isCollapsed;
+  const cardId = (card as any).cardId || card.id; // Use cardId if available, fallback to id
+  const isInAIContext = aiContextCards.includes(cardId);
+  
+  // Three display states: 0 = collapsed (heading only), 1 = preview (limited), 2 = expanded (full)
+  const [displayState, setDisplayState] = useState<0 | 1 | 2>(1); // Default to preview state
 
   useEffect(() => {
     setEditTitle(card.title);
     setEditContent(card.content || card.contentPreview || '');
+    // Reset full content when card changes
+    setFullContent(null);
   }, [card.title, card.content, card.contentPreview]);
+
+  // Load full content when editing starts
+  const loadFullContent = async () => {
+    if (fullContent !== null || isLoadingContent) return fullContent;
+    
+    try {
+      setIsLoadingContent(true);
+      const response = await api.get(`/cards/${cardId}`);
+      const content = response.data.card.content || '';
+      setFullContent(content);
+      return content;
+    } catch (error) {
+      console.error('Failed to load full card content:', error);
+      // Fallback to existing content
+      const fallbackContent = card.content || card.contentPreview || '';
+      setFullContent(fallbackContent);
+      return fallbackContent;
+    } finally {
+      setIsLoadingContent(false);
+    }
+  };
 
   const handleTitleSubmit = async () => {
     if (editTitle.trim() !== card.title) {
@@ -53,16 +82,17 @@ const Card: React.FC<CardProps> = ({
   };
 
   const handleContentSubmit = async () => {
-    const currentContent = card.content || card.contentPreview || '';
-    if (editContent !== currentContent) {
-      await onUpdate(card.id, { content: editContent });
+    const originalContent = fullContent || card.content || card.contentPreview || '';
+    if (editContent !== originalContent) {
+      await onUpdate(cardId, { content: editContent });
     }
     setIsEditingContent(false);
   };
 
   const handleContentKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      setEditContent(card.content || card.contentPreview || '');
+      const contentToRestore = fullContent || card.content || card.contentPreview || '';
+      setEditContent(contentToRestore);
       setIsEditingContent(false);
     }
     // Ctrl+S to save
@@ -72,10 +102,31 @@ const Card: React.FC<CardProps> = ({
     }
   };
 
+  // Toggle between the three display states
+  const handleToggleDisplay = () => {
+    setDisplayState(prevState => {
+      if (prevState === 0) return 1; // collapsed → preview
+      if (prevState === 1) return 2; // preview → expanded
+      return 0; // expanded → collapsed
+    });
+  };
+
+  // Get the appropriate icon for current display state
+  const getDisplayIcon = () => {
+    switch (displayState) {
+      case 0: return '▶'; // Collapsed - right arrow
+      case 1: return '▼'; // Preview - down arrow
+      case 2: return '▲'; // Expanded - up arrow
+      default: return '▼';
+    }
+  };
+
   const cardClasses = [
     'card',
     isInAIContext && 'card-ai-context',
-    isCollapsed && 'card-collapsed',
+    displayState === 0 && 'card-collapsed',
+    displayState === 1 && 'card-preview',
+    displayState === 2 && 'card-expanded',
     depth > 0 && 'card-nested'
   ].filter(Boolean).join(' ');
 
@@ -85,7 +136,7 @@ const Card: React.FC<CardProps> = ({
 
   return (
     <div className={cardClasses}>
-      <div className="card-header" onClick={() => onToggleCollapse(streamCard.id)}>
+      <div className="card-header" onClick={handleToggleDisplay}>
         {isEditingTitle ? (
           <input
             type="text"
@@ -117,7 +168,7 @@ const Card: React.FC<CardProps> = ({
             className={`btn btn-small ${isInAIContext ? 'btn-primary' : ''}`}
             onClick={(e) => {
               e.stopPropagation();
-              toggleAIContext(card.id);
+              toggleAIContext(cardId);
             }}
             title={isInAIContext ? 'Remove from AI context' : 'Add to AI context'}
           >
@@ -127,13 +178,17 @@ const Card: React.FC<CardProps> = ({
           <button
             type="button"
             className="btn btn-small"
-            onClick={(e) => {
+            onClick={async (e) => {
               e.stopPropagation();
+              // Load full content before editing
+              const content = await loadFullContent();
+              setEditContent(content);
               setIsEditingContent(true);
             }}
+            disabled={isLoadingContent}
             title="Edit content"
           >
-            Edit
+            {isLoadingContent ? 'Loading...' : 'Edit'}
           </button>
           
           <button
@@ -141,7 +196,7 @@ const Card: React.FC<CardProps> = ({
             className="btn btn-small"
             onClick={(e) => {
               e.stopPropagation();
-              onDelete(card.id);
+              onDelete(cardId);
             }}
             title="Remove card from stream"
             style={{ 
@@ -156,15 +211,18 @@ const Card: React.FC<CardProps> = ({
           <button
             type="button"
             className="btn btn-small"
-            onClick={(e) => e.stopPropagation()}
-            title={isCollapsed ? 'Expand' : 'Collapse'}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleDisplay();
+            }}
+            title={displayState === 0 ? 'Show preview' : displayState === 1 ? 'Show full' : 'Collapse'}
           >
-            {isCollapsed ? '▶' : '▼'}
+            {getDisplayIcon()}
           </button>
         </div>
       </div>
 
-      {!isCollapsed && (
+      {displayState > 0 && (
         <div className="card-content">
           {isEditingContent ? (
             <div>
@@ -173,10 +231,18 @@ const Card: React.FC<CardProps> = ({
                 onChange={(e) => setEditContent(e.target.value)}
                 onKeyDown={handleContentKeyDown}
                 className="form-input form-textarea"
-                style={{ width: '100%', marginBottom: '12px' }}
+                style={{ 
+                  width: '100%', 
+                  marginBottom: '12px',
+                  minHeight: editContent.length > 1000 ? '400px' : '120px',
+                  maxHeight: '80vh'
+                }}
                 autoFocus
                 placeholder="Write your content in markdown..."
               />
+              <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '8px' }}>
+                {editContent.length.toLocaleString()} characters • {Math.round(editContent.split(/\s+/).filter((w: string) => w.length > 0).length).toLocaleString()} words
+              </div>
               <div className="flex gap-sm">
                 <button
                   type="button"
@@ -189,7 +255,8 @@ const Card: React.FC<CardProps> = ({
                   type="button"
                   className="btn btn-small"
                   onClick={() => {
-                    setEditContent(card.content || card.contentPreview || '');
+                    const contentToRestore = fullContent || card.content || card.contentPreview || '';
+                    setEditContent(contentToRestore);
                     setIsEditingContent(false);
                   }}
                 >
@@ -199,11 +266,65 @@ const Card: React.FC<CardProps> = ({
             </div>
           ) : (
             <div 
-              className="card-content-display"
-              onDoubleClick={() => setIsEditingContent(true)}
+              className={`card-content-display ${displayState === 1 ? 'card-content-preview' : 'card-content-expanded'}`}
+              onDoubleClick={async () => {
+                const content = await loadFullContent();
+                setEditContent(content);
+                setIsEditingContent(true);
+              }}
             >
               {(card.content || card.contentPreview) ? (
-                <ReactMarkdown>{card.content || card.contentPreview}</ReactMarkdown>
+                <>
+                  {displayState === 2 ? (
+                    // Fully expanded - show complete content or load it if needed
+                    fullContent ? (
+                      <ReactMarkdown>{fullContent}</ReactMarkdown>
+                    ) : (
+                      <>
+                        <ReactMarkdown>{card.content || card.contentPreview}</ReactMarkdown>
+                        {(!card.content && card.contentPreview && card.contentPreview.length >= 500) && (
+                          <div 
+                            className="read-more-indicator"
+                            onClick={async () => {
+                              await loadFullContent();
+                            }}
+                            style={{ 
+                              color: '#6b7280', 
+                              fontSize: '12px', 
+                              marginTop: '8px', 
+                              cursor: 'pointer',
+                              textDecoration: 'underline'
+                            }}
+                          >
+                            {isLoadingContent ? 'Loading full content...' : '...click to load full content'}
+                          </div>
+                        )}
+                      </>
+                    )
+                  ) : (
+                    // Preview mode - show limited content with read more
+                    <>
+                      <div className="card-preview-content">
+                        <ReactMarkdown>{card.content || card.contentPreview}</ReactMarkdown>
+                      </div>
+                      {(card.content || card.contentPreview) && (card.content || card.contentPreview).length > 200 && (
+                        <div 
+                          className="read-more-indicator"
+                          onClick={() => setDisplayState(2)}
+                          style={{ 
+                            color: '#3b82f6', 
+                            fontSize: '12px', 
+                            marginTop: '4px', 
+                            cursor: 'pointer',
+                            fontWeight: '500'
+                          }}
+                        >
+                          ...read more
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
               ) : (
                 <p style={{ color: '#6b7280', fontStyle: 'italic' }}>
                   No content yet. Double-click to add content.

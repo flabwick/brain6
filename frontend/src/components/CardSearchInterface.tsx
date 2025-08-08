@@ -23,7 +23,7 @@ const CardSearchInterface: React.FC<CardSearchInterfaceProps> = ({
   const [allCards, setAllCards] = useState<CardType[]>([]);
 
   // Get IDs of cards already in this stream
-  const cardsInStreamIds = streamCards.map(sc => sc.card?.id).filter(Boolean);
+  const cardsInStreamIds = streamCards.map(sc => sc.cardId || sc.id).filter(Boolean);
   const cardsInStream = new Set(cardsInStreamIds);
 
   useEffect(() => {

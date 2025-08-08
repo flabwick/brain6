@@ -26,11 +26,14 @@ export interface Card {
   id: string;
   brainId: string;
   title: string;
-  currentVersionId: string;
+  contentPreview: string; // First 500 characters for quick display
+  fileSize: number;
+  hasFile: boolean;
   filePath?: string;
+  lastModified?: string;
   createdAt: string;
   updatedAt: string;
-  content?: string; // From current version
+  content?: string; // Full content (only included when specifically requested)
 }
 
 export interface CardVersion {
@@ -53,14 +56,27 @@ export interface Stream {
 }
 
 export interface StreamCard {
-  id: string;
-  streamId: string;
-  cardId: string;
+  // Stream card metadata
+  id?: string; // Stream card ID (may not always be present)
+  streamId?: string;
+  cardId?: string;
   position: number;
   isInAIContext: boolean;
   isCollapsed: boolean;
   addedAt: string;
-  card?: Card; // Populated when fetching stream cards
+  depth: number;
+  
+  // Card data (merged in when fetching stream cards)
+  brainId: string;
+  title: string;
+  contentPreview: string;
+  fileSize: number;
+  hasFile: boolean;
+  filePath?: string;
+  lastModified?: string;
+  createdAt: string;
+  updatedAt: string;
+  content?: string;
 }
 
 // Card links

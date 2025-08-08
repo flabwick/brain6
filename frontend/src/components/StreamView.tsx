@@ -205,8 +205,8 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
       {/* Stream cards */}
       {streamCards.map((streamCard) => (
         <Card
-          key={streamCard.id}
-          card={streamCard}
+          key={streamCard.cardId || streamCard.id}
+          card={streamCard as any} // StreamCard contains all Card properties
           streamCard={streamCard}  
           streamId={streamId}
           onUpdate={handleUpdateCard}
