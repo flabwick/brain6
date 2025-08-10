@@ -6,12 +6,15 @@ import Login from './components/Login';
 import Header from './components/Header';
 import StreamView from './components/StreamView';
 import CommandBar from './components/CommandBar';
+import BrainInterface from './components/BrainInterface';
 import { Brain, Stream } from './types';
 import api from './services/api';
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const { selectedBrain, currentStream, setBrain, setStream, setError } = useApp();
+  const [showBrainInterface, setShowBrainInterface] = React.useState(false);
+  const [brainInterfaceInitialBrain, setBrainInterfaceInitialBrain] = React.useState<Brain | null>(null);
 
   const handleBrainSelect = (brain: Brain) => {
     setBrain(brain);
@@ -20,6 +23,7 @@ const AppContent: React.FC = () => {
 
   const handleStreamSelect = (stream: Stream) => {
     setStream(stream);
+    setShowBrainInterface(false); // Close brain interface when stream is selected
   };
 
   const handleNewStream = async () => {
@@ -76,11 +80,30 @@ const AppContent: React.FC = () => {
         onBrainSelect={handleBrainSelect}
         onStreamSelect={handleStreamSelect}
         onNewStream={handleNewStream}
+        onOpenBrainInterface={() => {
+          setBrainInterfaceInitialBrain(null);
+          setShowBrainInterface(true);
+        }}
+        onOpenCurrentBrainManagement={() => {
+          setBrainInterfaceInitialBrain(selectedBrain);
+          setShowBrainInterface(true);
+        }}
       />
       
       <main className="app-main">
         <div className="app-content">
-          {selectedBrain && currentStream ? (
+          {showBrainInterface ? (
+            <BrainInterface
+              isOpen={true}
+              onClose={() => {
+                setShowBrainInterface(false);
+                setBrainInterfaceInitialBrain(null);
+              }}
+              onBrainSelect={handleBrainSelect}
+              onStreamSelect={handleStreamSelect}
+              initialBrain={brainInterfaceInitialBrain}
+            />
+          ) : selectedBrain && currentStream ? (
             <StreamView
               streamId={currentStream.id}
               brainId={selectedBrain.id}

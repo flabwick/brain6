@@ -8,63 +8,52 @@ interface HeaderProps {
   onBrainSelect: (brain: Brain) => void;
   onStreamSelect: (stream: Stream) => void;
   onNewStream: () => Promise<void>;
+  onOpenBrainInterface: () => void;
+  onOpenCurrentBrainManagement: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStream }) => {
-  const [brains, setBrains] = useState<Brain[]>([]);
-  const [streams, setStreams] = useState<Stream[]>([]);
-  const [isLoadingBrains, setIsLoadingBrains] = useState(true);
-  const [isLoadingStreams, setIsLoadingStreams] = useState(false);
+const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStream, onOpenBrainInterface, onOpenCurrentBrainManagement }) => {
+  const [isEditingStreamName, setIsEditingStreamName] = useState(false);
+  const [editStreamName, setEditStreamName] = useState('');
   const { user, logout } = useAuth();
   const { selectedBrain, currentStream, setError } = useApp();
 
+  // Auto-load first brain and stream on mount
   useEffect(() => {
-    loadBrains();
+    const loadInitialData = async () => {
+      if (!selectedBrain) {
+        try {
+          const response = await api.get('/brains');
+          const brains = response.data.brains || [];
+          if (brains.length > 0) {
+            onBrainSelect(brains[0]);
+          }
+        } catch (err: any) {
+          setError(err.response?.data?.message || 'Failed to load brains');
+        }
+      }
+    };
+    
+    loadInitialData();
   }, []);
 
   useEffect(() => {
-    if (selectedBrain) {
-      loadStreams(selectedBrain.id);
-    }
+    const loadInitialStream = async () => {
+      if (selectedBrain && !currentStream) {
+        try {
+          const response = await api.get(`/streams?brainId=${selectedBrain.id}`);
+          const streams = response.data.streams || [];
+          if (streams.length > 0) {
+            onStreamSelect(streams[0]);
+          }
+        } catch (err: any) {
+          setError(err.response?.data?.message || 'Failed to load streams');
+        }
+      }
+    };
+    
+    loadInitialStream();
   }, [selectedBrain]);
-
-  const loadBrains = async () => {
-    try {
-      setIsLoadingBrains(true);
-      const response = await api.get('/brains');
-      setBrains(response.data.brains || []);
-      
-      // Auto-select first brain if none selected
-      if (!selectedBrain && response.data.brains?.length > 0) {
-        onBrainSelect(response.data.brains[0]);
-      }
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || 'Failed to load brains';
-      setError(errorMessage);
-    } finally {
-      setIsLoadingBrains(false);
-    }
-  };
-
-  const loadStreams = async (brainId: string) => {
-    try {
-      setIsLoadingStreams(true);
-      const response = await api.get(`/streams?brainId=${brainId}`);
-      
-      setStreams(response.data.streams || []);
-      
-      // Auto-select first stream if none selected
-      if (!currentStream && response.data.streams?.length > 0) {
-        onStreamSelect(response.data.streams[0]);
-      }
-    } catch (err: any) {
-      console.error('Failed to load streams:', err);
-      const errorMessage = err.response?.data?.message || 'Failed to load streams';
-      setError(errorMessage);
-    } finally {
-      setIsLoadingStreams(false);
-    }
-  };
 
   const handleLogout = async () => {
     if (window.confirm('Are you sure you want to sign out?')) {
@@ -72,109 +61,148 @@ const Header: React.FC<HeaderProps> = ({ onBrainSelect, onStreamSelect, onNewStr
     }
   };
 
+  const handleStartStreamEdit = () => {
+    if (currentStream) {
+      const streamName = (currentStream as any).name || currentStream.title || '';
+      setEditStreamName(streamName);
+      setIsEditingStreamName(true);
+    }
+  };
+
+  const handleStreamRename = async () => {
+    if (!currentStream || !selectedBrain || !editStreamName.trim()) {
+      setIsEditingStreamName(false);
+      return;
+    }
+
+    const newName = editStreamName.trim();
+    const currentName = (currentStream as any).name || currentStream.title || '';
+    
+    if (newName === currentName) {
+      setIsEditingStreamName(false);
+      return;
+    }
+
+    try {
+      // Check if stream name already exists in this brain
+      const response = await api.get(`/streams?brainId=${selectedBrain.id}`);
+      const streams = response.data.streams || [];
+      const nameExists = streams.some((s: any) => 
+        s.id !== currentStream.id && 
+        ((s.name || s.title || '').toLowerCase() === newName.toLowerCase())
+      );
+
+      if (nameExists) {
+        setError(`A stream named "${newName}" already exists in this brain`);
+        setIsEditingStreamName(false);
+        return;
+      }
+
+      // Update the stream name
+      await api.put(`/streams/${currentStream.id}`, { name: newName });
+      
+      // Update the current stream in the app context
+      const updatedStream = { ...currentStream, name: newName } as any;
+      onStreamSelect(updatedStream);
+      
+      setIsEditingStreamName(false);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to rename stream');
+      setIsEditingStreamName(false);
+    }
+  };
+
+  const handleStreamEditKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleStreamRename();
+    } else if (e.key === 'Escape') {
+      setIsEditingStreamName(false);
+      setEditStreamName('');
+    }
+  };
+
 
   return (
-    <header className="app-header">
-      <div className="flex items-center gap-md">
-        {/* Brain selector */}
-        <div className="flex items-center gap-sm">
-          <label htmlFor="brain-select" className="body-text" style={{ fontWeight: 500 }}>
-            Brain:
-          </label>
-          <select
-            id="brain-select"
-            value={selectedBrain?.id || ''}
-            onChange={(e) => {
-              const brain = brains.find(b => b.id === e.target.value);
-              if (brain) onBrainSelect(brain);
-            }}
-            className="form-input"
-            style={{ minWidth: '200px' }}
-            disabled={isLoadingBrains}
-          >
-            {isLoadingBrains ? (
-              <option>Loading brains...</option>
-            ) : brains.length === 0 ? (
-              <option>No brains found</option>
-            ) : (
-              brains.map(brain => (
-                <option key={brain.id} value={brain.id}>
-                  {(brain as any).name || brain.title}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
-
-        {/* Stream selector */}
-        <div className="flex items-center gap-sm">
-          <label htmlFor="stream-select" className="body-text" style={{ fontWeight: 500 }}>
-            Stream:
-          </label>
-          <select
-            id="stream-select"
-            value={currentStream?.id || ''}
-            onChange={(e) => {
-              const stream = streams.find(s => s.id === e.target.value);
-              if (stream) onStreamSelect(stream);
-            }}
-            className="form-input"
-            style={{ minWidth: '200px' }}
-            disabled={isLoadingStreams || !selectedBrain}
-          >
-            {isLoadingStreams ? (
-              <option>Loading streams...</option>
-            ) : streams.length === 0 ? (
-              <option>No streams found</option>
-            ) : (
-              streams.map(stream => (
-                <option key={stream.id} value={stream.id}>
-                  {(stream as any).name || stream.title}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
-
-        <button
-          onClick={async () => {
-            await onNewStream();
-            // Refresh streams after creating new one
-            if (selectedBrain) {
-              await loadStreams(selectedBrain.id);
-            }
-          }}
-          className="btn btn-small"
-          disabled={!selectedBrain}
-          title="Create new stream"
-        >
-          New Stream
-        </button>
-      </div>
-
-      <div className="flex items-center gap-md">
-        {/* Current stream title */}
-        {currentStream && (
-          <h1 className="stream-title">
-            {(currentStream as any).name || currentStream.title}
-          </h1>
-        )}
-
-        {/* User info and logout */}
-        <div className="flex items-center gap-sm">
-          <span className="body-text" style={{ fontSize: '12px', color: '#6b7280' }}>
-            {user?.username}
-          </span>
+    <>
+      <header className="app-header">
+        <div className="flex items-center gap-md">
+          {/* Brain Interface Button */}
           <button
-            onClick={handleLogout}
-            className="btn btn-small"
-            title="Sign out"
+            type="button"
+            className="btn btn-small brain-interface-btn"
+            onClick={onOpenBrainInterface}
+            title="Open Brain Interface"
           >
-            Sign out
+            🧠
           </button>
+
+          {/* Breadcrumb Navigation */}
+          <div className="breadcrumb-nav">
+            {selectedBrain && (
+              <>
+                <button
+                  type="button"
+                  className="breadcrumb-item brain-breadcrumb"
+                  onClick={onOpenCurrentBrainManagement}
+                  title="Manage current brain"
+                >
+                  {(selectedBrain as any).name || selectedBrain.title}
+                </button>
+                {currentStream && (
+                  <>
+                    <span className="breadcrumb-separator">›</span>
+                    {isEditingStreamName ? (
+                      <input
+                        type="text"
+                        value={editStreamName}
+                        onChange={(e) => setEditStreamName(e.target.value)}
+                        onBlur={handleStreamRename}
+                        onKeyDown={handleStreamEditKeyDown}
+                        className="breadcrumb-item stream-breadcrumb-input"
+                        autoFocus
+                        style={{
+                          background: 'white',
+                          border: '2px solid var(--focus-ring)',
+                          borderRadius: 'var(--border-radius)',
+                          padding: 'var(--spacing-xs) var(--spacing-sm)',
+                          fontSize: 'var(--font-size-body)',
+                          fontWeight: 'var(--font-weight-title)',
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="breadcrumb-item stream-breadcrumb"
+                        onClick={handleStartStreamEdit}
+                        title="Click to rename stream"
+                      >
+                        {(currentStream as any).name || currentStream.title}
+                      </button>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </div>
-      </div>
-    </header>
+
+        <div className="flex items-center gap-md">
+          {/* User info and logout */}
+          <div className="flex items-center gap-sm">
+            <span className="body-text" style={{ fontSize: '12px', color: '#6b7280' }}>
+              {user?.username}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="btn btn-small"
+              title="Sign out"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      </header>
+    </>
   );
 };
 
