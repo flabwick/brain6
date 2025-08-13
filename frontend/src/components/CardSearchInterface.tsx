@@ -34,8 +34,10 @@ const CardSearchInterface: React.FC<CardSearchInterfaceProps> = ({
     if (searchQuery.trim()) {
       performSearch();
     } else {
-      // Show all cards when no search query
-      setSearchResults(allCards.filter((card: CardType) => !cardsInStream.has(card.id)));
+      // Show all cards when no search query (excluding unsaved cards)
+      setSearchResults(allCards.filter((card: CardType) => 
+        !cardsInStream.has(card.id) && (card.cardType || 'saved') !== 'unsaved'
+      ));
     }
   }, [searchQuery, allCards, streamCards]);
 
@@ -44,8 +46,10 @@ const CardSearchInterface: React.FC<CardSearchInterfaceProps> = ({
       const response = await api.get(`/brains/${brainId}/cards`);
       const cards = response.data.cards || [];
       setAllCards(cards);
-      // Initially show all available cards (not in current stream)
-      setSearchResults(cards.filter((card: CardType) => !cardsInStream.has(card.id)));
+      // Initially show all available cards (not in current stream, excluding unsaved cards)
+      setSearchResults(cards.filter((card: CardType) => 
+        !cardsInStream.has(card.id) && (card.cardType || 'saved') !== 'unsaved'
+      ));
     } catch (err) {
       console.error('Failed to load brain cards:', err);
     }
@@ -60,9 +64,13 @@ const CardSearchInterface: React.FC<CardSearchInterfaceProps> = ({
       const filtered = allCards.filter((card: CardType) => {
         if (cardsInStream.has(card.id)) return false;
         
-        const titleMatch = card.title.toLowerCase().includes(searchQuery.toLowerCase());
-        const contentMatch = card.content?.toLowerCase().includes(searchQuery.toLowerCase());
-        return titleMatch || contentMatch;
+        // Exclude unsaved cards from search results
+        if ((card.cardType || 'saved') === 'unsaved') return false;
+        
+        const titleMatch = card.title?.toLowerCase().includes(searchQuery.toLowerCase()) || false;
+        const displayTitleMatch = card.displayTitle?.toLowerCase().includes(searchQuery.toLowerCase()) || false;
+        const contentMatch = card.content?.toLowerCase().includes(searchQuery.toLowerCase()) || false;
+        return titleMatch || displayTitleMatch || contentMatch;
       });
       
       setSearchResults(filtered);
@@ -134,7 +142,7 @@ const CardSearchInterface: React.FC<CardSearchInterfaceProps> = ({
                   }}
                 >
                   <div style={{ fontWeight: '500', marginBottom: '0.25rem' }}>
-                    {card.title}
+                    {card.displayTitle || card.title || 'Untitled'}
                   </div>
                   {card.content && (
                     <div style={{ 

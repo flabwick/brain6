@@ -33,7 +33,7 @@ CREATE TABLE brains (
 CREATE TABLE cards (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     brain_id UUID NOT NULL REFERENCES brains(id) ON DELETE CASCADE,
-    title VARCHAR(200) NOT NULL,
+    title VARCHAR(200),
     file_path VARCHAR(700), -- path to actual file in file system (nullable for manual cards)
     file_hash VARCHAR(64), -- SHA-256 hash for sync detection
     content_preview TEXT, -- first 500 chars for quick access
@@ -42,7 +42,13 @@ CREATE TABLE cards (
     last_modified TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(brain_id, title) -- card titles must be unique per brain
+    -- Card Type System fields
+    card_type VARCHAR(20) DEFAULT 'saved' CHECK (card_type IN ('saved', 'file', 'unsaved')),
+    is_brain_wide BOOLEAN DEFAULT true,
+    stream_specific_id UUID REFERENCES streams(id),
+    file_id UUID, -- reference to files table when available
+    -- Title uniqueness only applies to saved cards with titles
+    CONSTRAINT unique_brain_title UNIQUE (brain_id, title) DEFERRABLE INITIALLY DEFERRED
 );
 
 -- Card Links table - comprehensive [[card-title]] tracking
@@ -110,6 +116,11 @@ CREATE INDEX idx_cards_title ON cards(brain_id, title);
 CREATE INDEX idx_cards_file_path ON cards(file_path);
 CREATE INDEX idx_cards_file_hash ON cards(file_hash);
 CREATE INDEX idx_cards_active ON cards(is_active);
+-- Card Type System indexes
+CREATE INDEX idx_cards_type ON cards(card_type);
+CREATE INDEX idx_cards_brain_wide ON cards(is_brain_wide);
+CREATE INDEX idx_cards_stream_specific ON cards(stream_specific_id);
+CREATE INDEX idx_cards_type_brain ON cards(brain_id, card_type);
 
 CREATE INDEX idx_card_links_source ON card_links(source_card_id);
 CREATE INDEX idx_card_links_target ON card_links(target_card_id);
@@ -133,11 +144,38 @@ CREATE INDEX idx_cli_sessions_expires ON cli_sessions(expires_at);
 
 CREATE INDEX idx_web_sessions_expire ON web_sessions(expire);
 
--- Update timestamp trigger function
+-- Update timestamp trigger function with card type conversion logic
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
+    
+    -- Auto-convert unsaved to saved when title is added (for cards table only)
+    IF TG_TABLE_NAME = 'cards' THEN
+        -- Auto-convert unsaved to saved when title is added
+        IF OLD.card_type = 'unsaved' AND NEW.title IS NOT NULL AND NEW.title != '' AND 
+           (OLD.title IS NULL OR OLD.title = '') THEN
+            NEW.card_type = 'saved';
+            NEW.is_brain_wide = true;
+            NEW.stream_specific_id = NULL;
+        END IF;
+        
+        -- Ensure consistency rules for stream-specific cards
+        IF NEW.card_type = 'unsaved' AND NEW.stream_specific_id IS NULL THEN
+            RAISE EXCEPTION 'Unsaved cards must have stream_specific_id';
+        END IF;
+        
+        -- Brain-wide cards should not have stream restrictions
+        IF NEW.is_brain_wide = true AND NEW.stream_specific_id IS NOT NULL THEN
+            NEW.stream_specific_id = NULL;
+        END IF;
+        
+        -- Only unsaved cards can have stream restrictions
+        IF NEW.card_type != 'unsaved' AND NEW.stream_specific_id IS NOT NULL THEN
+            NEW.stream_specific_id = NULL;
+        END IF;
+    END IF;
+    
     RETURN NEW;
 END;
 $$ language 'plpgsql';

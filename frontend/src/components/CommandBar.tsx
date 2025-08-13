@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useTokenCount } from '../hooks/useTokenCount';
+import { tokenCounter } from '../services/tokenCounter';
 
 interface CommandBarProps {
   streamId?: string;
@@ -9,9 +11,15 @@ interface CommandBarProps {
 const CommandBar: React.FC<CommandBarProps> = ({ streamId }) => {
   const { aiContextCards, clearAIContext, currentStream } = useApp();
   const { user } = useAuth();
-
-  // Calculate estimated token count (rough estimation: ~4 chars per token)
-  const estimatedTokens = Math.ceil(aiContextCards.length * 100); // Rough estimate
+  const [selectedModel] = useState('gpt-4o'); // Default model for token counting
+  
+  // Use live token counting
+  const { totalTokens, isLoading: tokenLoading } = useTokenCount(selectedModel);
+  
+  // Get model context limit for percentage calculation
+  const contextLimit = tokenCounter.getContextLimit(selectedModel);
+  const usagePercentage = tokenCounter.getUsagePercentage(totalTokens, selectedModel);
+  const exceedsLimit = tokenCounter.exceedsLimit(totalTokens, selectedModel);
 
   return (
     <div className="app-command-bar">
@@ -41,20 +49,47 @@ const CommandBar: React.FC<CommandBarProps> = ({ streamId }) => {
             style={{ 
               fontSize: '12px', 
               fontWeight: 600,
-              color: aiContextCards.length > 0 ? 'var(--ai-context-border)' : 'var(--text-primary)'
+              color: exceedsLimit ? '#ef4444' : aiContextCards.length > 0 ? 'var(--ai-context-border)' : 'var(--text-primary)'
             }}
           >
-            {aiContextCards.length} cards (~{estimatedTokens} tokens)
+            {tokenLoading ? '...' : (
+              <>
+                {aiContextCards.length} cards ({tokenCounter.formatTokenCount(totalTokens)} tokens)
+                {totalTokens > 0 && (
+                  <span style={{ 
+                    fontSize: '10px', 
+                    opacity: 0.7,
+                    marginLeft: '4px'
+                  }}>
+                    {usagePercentage}%
+                  </span>
+                )}
+              </>
+            )}
           </span>
           {aiContextCards.length > 0 && (
-            <button
-              onClick={clearAIContext}
-              className="btn btn-small"
-              style={{ fontSize: '10px', padding: '2px 6px' }}
-              title="Clear AI context selection"
-            >
-              Clear
-            </button>
+            <>
+              <button
+                onClick={clearAIContext}
+                className="btn btn-small"
+                style={{ fontSize: '10px', padding: '2px 6px' }}
+                title="Clear AI context selection"
+              >
+                Clear
+              </button>
+              {exceedsLimit && (
+                <span 
+                  style={{ 
+                    fontSize: '10px', 
+                    color: '#ef4444',
+                    fontWeight: 500
+                  }}
+                  title={`Context exceeds ${selectedModel} limit of ${tokenCounter.formatTokenCount(contextLimit)} tokens`}
+                >
+                  ⚠️ Limit exceeded
+                </span>
+              )}
+            </>
           )}
         </div>
 

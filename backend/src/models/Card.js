@@ -21,17 +21,25 @@ class Card {
     this.lastModified = data.last_modified;
     this.createdAt = data.created_at;
     this.updatedAt = data.updated_at;
+    // Card Type System properties
+    this.cardType = data.card_type || 'saved';
+    this.isBrainWide = data.is_brain_wide !== undefined ? data.is_brain_wide : true;
+    this.streamSpecificId = data.stream_specific_id || null;
+    this.fileId = data.file_id || null;
   }
 
   /**
    * Create a new card with optional file system integration
    * @param {string} brainId - Brain ID that owns the card
-   * @param {string} title - Card title (must be unique within brain)
+   * @param {string} title - Card title (optional for unsaved cards)
    * @param {Object} options - Card creation options
    * @param {string} options.content - Card content (markdown)
    * @param {string} options.filePath - Path to source file (optional)
    * @param {string} options.fileHash - File hash for sync (optional)
    * @param {number} options.fileSize - File size in bytes (optional)
+   * @param {string} options.cardType - Card type ('saved', 'file', 'unsaved')
+   * @param {string} options.streamId - Stream ID for unsaved cards
+   * @param {string} options.fileId - File ID for file cards
    * @returns {Promise<Card>} - Created card instance
    */
   static async create(brainId, title, options = {}) {
@@ -39,14 +47,38 @@ class Card {
       content = '',
       filePath = null,
       fileHash = null,
-      fileSize = 0
+      fileSize = 0,
+      cardType = 'saved',
+      streamId = null,
+      fileId = null
     } = options;
 
-    if (!title || title.trim().length === 0) {
-      throw new Error('Card title is required');
+    // Validate card type
+    if (!['saved', 'file', 'unsaved'].includes(cardType)) {
+      throw new Error('Invalid card type. Must be saved, file, or unsaved');
     }
 
-    if (title.length > 200) {
+    // Validate title requirements based on card type
+    if (cardType === 'saved' && (!title || title.trim().length === 0)) {
+      throw new Error('Card title is required for saved cards');
+    }
+    
+    // Allow unsaved cards without titles
+    if (cardType === 'unsaved' && title && title.trim().length === 0) {
+      title = null; // Normalize empty strings to null for unsaved cards
+    }
+
+    // Validate unsaved card requirements
+    if (cardType === 'unsaved' && !streamId) {
+      throw new Error('Stream ID is required for unsaved cards');
+    }
+
+    // Validate file card requirements
+    if (cardType === 'file' && !fileId) {
+      throw new Error('File ID is required for file cards');
+    }
+
+    if (title && title.length > 200) {
       throw new Error('Card title cannot exceed 200 characters');
     }
 
@@ -63,14 +95,28 @@ class Card {
 
       const brain = brainResult.rows[0];
 
-      // Check if card title already exists in this brain
-      const existingCard = await client.query(
-        'SELECT id FROM cards WHERE brain_id = $1 AND title = $2 AND is_active = true',
-        [brainId, title.trim()]
-      );
+      // Check if card title already exists in this brain (only for titled cards)
+      if (title && title.trim() && cardType === 'saved') {
+        const existingCard = await client.query(
+          'SELECT id FROM cards WHERE brain_id = $1 AND title = $2 AND is_active = true',
+          [brainId, title.trim()]
+        );
 
-      if (existingCard.rows.length > 0) {
-        throw new Error(`Card '${title}' already exists in this brain`);
+        if (existingCard.rows.length > 0) {
+          throw new Error(`Card '${title}' already exists in this brain`);
+        }
+      }
+
+      // Validate stream exists for unsaved cards
+      if (cardType === 'unsaved') {
+        const streamResult = await client.query(
+          'SELECT id FROM streams WHERE id = $1 AND brain_id = $2',
+          [streamId, brainId]
+        );
+        
+        if (streamResult.rows.length === 0) {
+          throw new Error('Stream not found or does not belong to this brain');
+        }
       }
 
       // Generate content preview (first 500 characters)
@@ -82,18 +128,29 @@ class Card {
         calculatedHash = crypto.createHash('sha256').update(content).digest('hex');
       }
 
+      // Set card type specific properties
+      const isBrainWide = cardType !== 'unsaved';
+      const streamSpecificId = cardType === 'unsaved' ? streamId : null;
+      const titleToStore = title ? title.trim() : null;
+
       // Insert card into database
       const result = await client.query(`
-        INSERT INTO cards (brain_id, title, file_path, file_hash, content_preview, file_size, is_active, last_modified)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+        INSERT INTO cards (
+          brain_id, title, file_path, file_hash, content_preview, file_size, is_active, 
+          last_modified, card_type, is_brain_wide, stream_specific_id, file_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, $8, $9, $10, $11)
         RETURNING *
-      `, [brainId, title.trim(), filePath, calculatedHash, contentPreview, fileSize, true]);
+      `, [
+        brainId, titleToStore, filePath, calculatedHash, contentPreview, fileSize, true,
+        cardType, isBrainWide, streamSpecificId, fileId
+      ]);
 
       const card = new Card(result.rows[0]);
 
-      // If content provided and no file path, save as markdown file
-      if (content && !filePath) {
-        const sanitizedTitle = title.replace(/[^a-zA-Z0-9\s-]/g, '').replace(/\s+/g, '-').toLowerCase();
+      // If content provided and no file path, save as markdown file (only for saved cards)
+      if (content && !filePath && cardType === 'saved' && titleToStore) {
+        const sanitizedTitle = titleToStore.replace(/[^a-zA-Z0-9\s-]/g, '').replace(/\s+/g, '-').toLowerCase();
         const fileName = `${sanitizedTitle}.md`;
         const cardFilePath = path.join(brain.folder_path, 'cards', fileName);
         
@@ -325,7 +382,7 @@ class Card {
    * @returns {Promise<void>}
    */
   async update(updates) {
-    const allowedFields = ['title', 'file_path', 'file_hash', 'content_preview', 'file_size'];
+    const allowedFields = ['title', 'file_path', 'file_hash', 'content_preview', 'file_size', 'card_type', 'is_brain_wide', 'stream_specific_id', 'file_id'];
     const validUpdates = {};
     
     for (const [key, value] of Object.entries(updates)) {
@@ -336,6 +393,11 @@ class Card {
 
     if (Object.keys(validUpdates).length === 0) {
       throw new Error('No valid fields to update');
+    }
+
+    // Validate card type changes
+    if (validUpdates.card_type && !['saved', 'file', 'unsaved'].includes(validUpdates.card_type)) {
+      throw new Error('Invalid card type. Must be saved, file, or unsaved');
     }
 
     // Check title uniqueness if title is being updated
@@ -359,7 +421,142 @@ class Card {
     Object.assign(this, validUpdates);
     this.updatedAt = new Date();
 
-    console.log(`✅ Updated card metadata: ${this.title}`);
+    console.log(`✅ Updated card metadata: ${this.title || 'Untitled'}`);
+  }
+
+  /**
+   * Convert unsaved card to saved card
+   * @param {string} title - New title for the card
+   * @returns {Promise<void>}
+   */
+  async convertToSaved(title) {
+    if (this.cardType !== 'unsaved') {
+      throw new Error('Only unsaved cards can be converted to saved');
+    }
+
+    if (!title || title.trim().length === 0) {
+      throw new Error('Title is required when converting to saved card');
+    }
+
+    if (title.length > 200) {
+      throw new Error('Card title cannot exceed 200 characters');
+    }
+
+    // Check title uniqueness
+    const existing = await Card.findByBrainAndTitle(this.brainId, title.trim());
+    if (existing && existing.id !== this.id) {
+      throw new Error(`Card '${title}' already exists in this brain`);
+    }
+
+    await transaction(async (client) => {
+      // Get brain info for file path
+      const brainResult = await client.query(
+        'SELECT folder_path FROM brains WHERE id = $1',
+        [this.brainId]
+      );
+
+      if (brainResult.rows.length === 0) {
+        throw new Error('Brain not found');
+      }
+
+      const brain = brainResult.rows[0];
+
+      // Update card to saved type
+      await client.query(`
+        UPDATE cards 
+        SET title = $1, card_type = 'saved', is_brain_wide = true, 
+            stream_specific_id = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [title.trim(), this.id]);
+
+      // Create markdown file if content exists
+      if (this.contentPreview || await this.getContent()) {
+        const content = await this.getContent();
+        const sanitizedTitle = title.trim().replace(/[^a-zA-Z0-9\s-]/g, '').replace(/\s+/g, '-').toLowerCase();
+        const fileName = `${sanitizedTitle}.md`;
+        const cardFilePath = path.join(brain.folder_path, 'cards', fileName);
+        
+        await fs.ensureDir(path.dirname(cardFilePath));
+        await fs.writeFile(cardFilePath, content, 'utf8');
+        
+        // Update card with file path
+        await client.query(
+          'UPDATE cards SET file_path = $1 WHERE id = $2',
+          [cardFilePath, this.id]
+        );
+        this.filePath = cardFilePath;
+      }
+
+      // Update instance properties
+      this.title = title.trim();
+      this.cardType = 'saved';
+      this.isBrainWide = true;
+      this.streamSpecificId = null;
+      this.updatedAt = new Date();
+    });
+
+    console.log(`✅ Converted unsaved card to saved: ${title}`);
+  }
+
+  /**
+   * Check if card can be added to AI context
+   * @returns {boolean}
+   */
+  canBeInAIContext() {
+    // All card types can be used in AI context if they have content
+    return this.isActive && (this.contentPreview || this.hasTitle());
+  }
+
+  /**
+   * Check if card has a title
+   * @returns {boolean}
+   */
+  hasTitle() {
+    return !!(this.title && this.title.trim().length > 0);
+  }
+
+  /**
+   * Check if card is saved to brain (has title for unsaved cards)
+   * @returns {boolean}
+   */
+  isSavedToBrain() {
+    if (this.cardType === 'saved' || this.cardType === 'file') {
+      return true;
+    }
+    if (this.cardType === 'unsaved') {
+      return this.hasTitle(); // Unsaved cards with titles are effectively saved to brain
+    }
+    return false;
+  }
+
+  /**
+   * Get display title for card (with fallback for titleless cards)
+   * @returns {string}
+   */
+  getDisplayTitle() {
+    if (this.hasTitle()) {
+      return this.title;
+    }
+    
+    if (this.cardType === 'unsaved') {
+      return 'Click to add title...';
+    }
+    
+    return 'Untitled';
+  }
+
+  /**
+   * Get card type display information
+   * @returns {Object} - Type info with icon and label
+   */
+  getTypeInfo() {
+    const typeMap = {
+      saved: { icon: '💾', label: 'Saved Card', description: 'Permanent brain-wide content' },
+      file: { icon: '📄', label: 'File Card', description: 'Linked document or file' },
+      unsaved: { icon: '⚠️', label: 'Unsaved Card', description: 'Temporary stream content' }
+    };
+
+    return typeMap[this.cardType] || typeMap.saved;
   }
 
   /**
@@ -548,17 +745,29 @@ class Card {
    * @returns {Promise<Object>} - Card data
    */
   async toJSON(includeContent = false) {
+    const typeInfo = this.getTypeInfo();
+    
     const data = {
       id: this.id,
       brainId: this.brainId,
       title: this.title,
+      displayTitle: this.getDisplayTitle(),
       contentPreview: this.contentPreview,
       fileSize: this.fileSize,
       hasFile: !!this.filePath,
       filePath: this.filePath,
       lastModified: this.lastModified,
       createdAt: this.createdAt,
-      updatedAt: this.updatedAt
+      updatedAt: this.updatedAt,
+      // Card Type System fields
+      cardType: this.cardType,
+      isBrainWide: this.isBrainWide,
+      streamSpecificId: this.streamSpecificId,
+      fileId: this.fileId,
+      hasTitle: this.hasTitle(),
+      isSavedToBrain: this.isSavedToBrain(),
+      canBeInAIContext: this.canBeInAIContext(),
+      typeInfo: typeInfo
     };
 
     if (includeContent) {
@@ -584,6 +793,100 @@ class Card {
     `, [brainId]);
 
     return parseInt(result.rows[0].count);
+  }
+
+  /**
+   * Find cards by type
+   * @param {string} brainId - Brain ID
+   * @param {string} cardType - Card type to filter by
+   * @param {Object} options - Query options
+   * @returns {Promise<Array<Card>>} - Array of cards
+   */
+  static async findByType(brainId, cardType, options = {}) {
+    const {
+      activeOnly = true,
+      limit = null,
+      offset = 0,
+      orderBy = 'created_at DESC'
+    } = options;
+
+    if (!['saved', 'file', 'unsaved'].includes(cardType)) {
+      throw new Error('Invalid card type. Must be saved, file, or unsaved');
+    }
+
+    const whereClause = activeOnly ? 'AND is_active = true' : '';
+    const limitClause = limit ? `LIMIT ${limit} OFFSET ${offset}` : '';
+    
+    const result = await query(`
+      SELECT * FROM cards 
+      WHERE brain_id = $1 AND card_type = $2 ${whereClause}
+      ORDER BY ${orderBy}
+      ${limitClause}
+    `, [brainId, cardType]);
+
+    return result.rows.map(row => new Card(row));
+  }
+
+  /**
+   * Find unsaved cards in a specific stream
+   * @param {string} streamId - Stream ID
+   * @param {Object} options - Query options
+   * @returns {Promise<Array<Card>>} - Array of unsaved cards in stream
+   */
+  static async findUnsavedInStream(streamId, options = {}) {
+    const {
+      activeOnly = true,
+      orderBy = 'created_at ASC'
+    } = options;
+
+    const whereClause = activeOnly ? 'AND is_active = true' : '';
+    
+    const result = await query(`
+      SELECT * FROM cards 
+      WHERE stream_specific_id = $1 AND card_type = 'unsaved' ${whereClause}
+      ORDER BY ${orderBy}
+    `, [streamId]);
+
+    return result.rows.map(row => new Card(row));
+  }
+
+  /**
+   * Get card type statistics for a brain
+   * @param {string} brainId - Brain ID
+   * @returns {Promise<Object>} - Statistics object
+   */
+  static async getTypeStatistics(brainId) {
+    const result = await query(`
+      SELECT 
+        card_type,
+        COUNT(*) as count,
+        SUM(file_size) as total_size,
+        AVG(file_size) as avg_size,
+        MAX(updated_at) as last_updated
+      FROM cards 
+      WHERE brain_id = $1 AND is_active = true
+      GROUP BY card_type
+      ORDER BY count DESC
+    `, [brainId]);
+
+    const stats = {
+      total: 0,
+      saved: 0,
+      file: 0,
+      unsaved: 0,
+      totalSize: 0
+    };
+
+    result.rows.forEach(row => {
+      stats.total += parseInt(row.count);
+      stats[row.card_type] = parseInt(row.count);
+      stats.totalSize += parseInt(row.total_size || 0);
+      stats[`${row.card_type}_size`] = parseInt(row.total_size || 0);
+      stats[`${row.card_type}_avg_size`] = parseFloat(row.avg_size || 0);
+      stats[`${row.card_type}_last_updated`] = row.last_updated;
+    });
+
+    return stats;
   }
 }
 

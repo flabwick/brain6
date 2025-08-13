@@ -162,6 +162,7 @@ class Brain {
     const result = await query(`
       SELECT * FROM cards 
       WHERE brain_id = $1 ${whereClause}
+      AND (card_type IS NULL OR card_type != 'unsaved')
       ORDER BY title
     `, [this.id]);
 
@@ -180,6 +181,7 @@ class Brain {
       SELECT COUNT(*) as count 
       FROM cards 
       WHERE brain_id = $1 ${whereClause}
+      AND (card_type IS NULL OR card_type != 'unsaved')
     `, [this.id]);
 
     return parseInt(result.rows[0].count);

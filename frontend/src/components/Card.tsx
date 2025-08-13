@@ -4,7 +4,7 @@ import { Card as CardType, StreamCard } from '../types';
 import { useApp } from '../contexts/AppContext';
 import api from '../services/api';
 import CardSearchInterface from './CardSearchInterface';
-import CardCreateInterface from './CardCreateInterface';
+import GenerateInterface from './GenerateInterface';
 
 interface CardProps {
   card: CardType;
@@ -13,20 +13,21 @@ interface CardProps {
   brainId: string;
   depth?: number;
   onUpdate: (cardId: string, updates: Partial<CardType>) => void;
-  onDelete: (cardId: string) => void;
+  onDelete: (cardId: string) => void; // Remove from stream
+  onDeleteFromBrain?: (cardId: string) => void; // Delete completely from brain
   onToggleCollapse?: (streamCardId: string) => void; // Made optional since we handle display locally now
   onAddCardBelow?: (afterPosition: number) => void;
   onCreateCardBelow?: (afterPosition: number) => void;
+  onGenerateCardBelow?: (afterPosition: number, prompt: string, model: string) => void;
+  isGenerating?: boolean;
+  onStopGeneration?: () => void;
   onMoveUp?: (cardId: string) => void;
   onMoveDown?: (cardId: string) => void;
   isFirst?: boolean;
   isLast?: boolean;
   showAddInterface?: boolean;
-  showCreateInterface?: boolean;
   onAddCard?: (cardId: string, position: number) => void;
-  onCreateCard?: (card: CardType, position: number) => void;
   onCancelAdd?: () => void;
-  onCancelCreate?: () => void;
 }
 
 const Card: React.FC<CardProps> = ({
@@ -37,36 +38,43 @@ const Card: React.FC<CardProps> = ({
   depth = 0,
   onUpdate,
   onDelete,
+  onDeleteFromBrain,
   onToggleCollapse,
   onAddCardBelow,
   onCreateCardBelow,
+  onGenerateCardBelow,
+  isGenerating = false,
+  onStopGeneration,
   onMoveUp,
   onMoveDown,
   isFirst = false,
   isLast = false,
   showAddInterface = false,
-  showCreateInterface = false,
   onAddCard,
-  onCreateCard,
   onCancelAdd,
-  onCancelCreate,
 }) => {
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(!card.title);
   const [isEditingContent, setIsEditingContent] = useState(false);
-  const [editTitle, setEditTitle] = useState(card.title);
+  const [editTitle, setEditTitle] = useState(card.title || '');
   const [editContent, setEditContent] = useState(card.content || card.contentPreview || '');
   const [fullContent, setFullContent] = useState<string | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
+  const [saveIndicatorPulse, setSaveIndicatorPulse] = useState(false);
+  const [showGenerateInterface, setShowGenerateInterface] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
   const { aiContextCards, toggleAIContext } = useApp();
 
   const cardId = (card as any).cardId || card.id; // Use cardId if available, fallback to id
   const isInAIContext = aiContextCards.includes(cardId);
   
   // Three display states: 0 = collapsed (heading only), 1 = preview (limited), 2 = expanded (full)
-  const [displayState, setDisplayState] = useState<0 | 1 | 2>(1); // Default to preview state
+  // AI generated cards default to expanded (2), others default to preview (1)
+  const [displayState, setDisplayState] = useState<0 | 1 | 2>(
+    (!card.title && card.content) || isGenerating ? 2 : 1
+  );
 
   useEffect(() => {
-    setEditTitle(card.title);
+    setEditTitle(card.title || '');
     setEditContent(card.content || card.contentPreview || '');
     // Reset full content when card changes
     setFullContent(null);
@@ -94,25 +102,121 @@ const Card: React.FC<CardProps> = ({
   };
 
   const handleTitleSubmit = async () => {
-    if (editTitle.trim() !== card.title) {
-      await onUpdate(card.id, { title: editTitle.trim() });
+    const newTitle = editTitle.trim();
+    const oldTitle = card.title || '';
+    
+    if (newTitle !== oldTitle) {
+      if (!card.title) {
+        // Use the special update endpoint for unsaved cards to trigger conversion
+        try {
+          const response = await api.put(`/cards/${card.id}/update-with-title`, {
+            title: newTitle || null,
+            content: fullContent || card.content || card.contentPreview || ''
+          });
+          
+          // Show save animation when title is added (converting to saved)
+          if (newTitle && response.data.card.title) {
+            setSaveIndicatorPulse(true);
+            setTimeout(() => setSaveIndicatorPulse(false), 1000);
+          }
+          
+          // The card may have converted from unsaved to saved
+          if (response.data.card.title) {
+            // Update immediately without scroll position changes
+            if (onUpdate) {
+              await onUpdate(card.id, { 
+                title: response.data.card.title,
+                cardType: response.data.card.cardType 
+              });
+            }
+          }
+        } catch (error: any) {
+          console.error('Failed to update unsaved card:', error);
+          
+          // Check for title conflict error
+          if (error.response?.status === 409 || error.response?.data?.message?.includes('already exists')) {
+            setTitleError(`A card with the title "${newTitle}" already exists in this brain`);
+            return; // Don't proceed with fallback
+          }
+          
+          // Other errors - fallback to regular update
+          try {
+            await onUpdate(card.id, { title: newTitle });
+            setTitleError(null);
+          } catch (fallbackError: any) {
+            if (fallbackError.response?.status === 409 || fallbackError.response?.data?.message?.includes('already exists')) {
+              setTitleError(`A card with the title "${newTitle}" already exists in this brain`);
+            }
+          }
+        }
+      } else {
+        try {
+          await onUpdate(card.id, { title: newTitle });
+          setTitleError(null); // Clear any previous errors
+        } catch (error: any) {
+          if (error.response?.status === 409 || error.response?.data?.message?.includes('already exists')) {
+            setTitleError(`A card with the title "${newTitle}" already exists in this brain`);
+            return; // Don't close editing mode
+          }
+          throw error; // Re-throw other errors
+        }
+      }
     }
-    setIsEditingTitle(false);
+    if (!titleError) { // Only close editing if there's no error
+      setIsEditingTitle(false);
+    }
   };
 
   const handleTitleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       handleTitleSubmit();
     } else if (e.key === 'Escape') {
-      setEditTitle(card.title);
+      setEditTitle(card.title || '');
+      setTitleError(null);
       setIsEditingTitle(false);
+    }
+  };
+
+  const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEditTitle(e.target.value);
+    if (titleError) {
+      setTitleError(null); // Clear error when user starts typing
     }
   };
 
   const handleContentSubmit = async () => {
     const originalContent = fullContent || card.content || card.contentPreview || '';
     if (editContent !== originalContent) {
-      await onUpdate(cardId, { content: editContent });
+      if (!card.title) {
+        // Use the special update endpoint for unsaved cards
+        try {
+          const response = await api.put(`/cards/${card.id}/update-with-title`, {
+            title: card.title || null,
+            content: editContent
+          });
+          
+          // Show save animation (but card remains unsaved until title is added)
+          setSaveIndicatorPulse(true);
+          setTimeout(() => setSaveIndicatorPulse(false), 1000);
+          
+          // Update content immediately
+          if (onUpdate) {
+            await onUpdate(card.id, { 
+              content: editContent,
+              contentPreview: editContent.substring(0, 500)
+            });
+          }
+        } catch (error) {
+          console.error('Failed to update unsaved card content:', error);
+          // Fallback to regular update
+          await onUpdate(cardId, { content: editContent });
+        }
+      } else {
+        await onUpdate(cardId, { content: editContent });
+        // Show save animation for regular cards too
+        setSaveIndicatorPulse(true);
+        setTimeout(() => setSaveIndicatorPulse(false), 1000);
+      }
     }
     setIsEditingContent(false);
   };
@@ -122,10 +226,14 @@ const Card: React.FC<CardProps> = ({
       const contentToRestore = fullContent || card.content || card.contentPreview || '';
       setEditContent(contentToRestore);
       setIsEditingContent(false);
+      // Also cancel title editing
+      setEditTitle(card.title || '');
+      setIsEditingTitle(false);
     }
-    // Ctrl+S to save
+    // Ctrl+S to save both title and content
     if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
+      handleTitleSubmit();
       handleContentSubmit();
     }
   };
@@ -151,6 +259,7 @@ const Card: React.FC<CardProps> = ({
 
   const cardClasses = [
     'card',
+    card.title ? 'card-saved' : 'card-unsaved',
     isInAIContext && 'card-ai-context',
     displayState === 0 && 'card-collapsed',
     displayState === 1 && 'card-preview',
@@ -163,42 +272,118 @@ const Card: React.FC<CardProps> = ({
   } : {};
 
   return (
-    <div className={cardClasses}>
-      <div className="card-header" onClick={handleToggleDisplay}>
+    <div className={cardClasses} data-card-id={cardId}>
+      <div className="card-header" onClick={handleToggleDisplay}>        
         {isEditingTitle ? (
-          <input
-            type="text"
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            onBlur={handleTitleSubmit}
-            onKeyDown={handleTitleKeyDown}
-            className="card-title-editable"
-            style={titleStyle}
-            autoFocus
-            onClick={(e) => e.stopPropagation()}
-          />
+          <div>
+            <input
+              type="text"
+              value={editTitle}
+              onChange={handleTitleChange}
+              onBlur={handleTitleSubmit}
+              onKeyDown={handleTitleKeyDown}
+              className="card-title-editable"
+              style={{
+                ...titleStyle,
+                border: titleError ? '2px solid #ef4444' : undefined,
+                borderRadius: titleError ? '4px' : undefined
+              }}
+              placeholder={!card.title ? '' : 'Card title'}
+              autoFocus
+              onClick={(e) => e.stopPropagation()}
+            />
+            {titleError && (
+              <div 
+                style={{ 
+                  color: '#ef4444', 
+                  fontSize: '12px', 
+                  marginTop: '4px',
+                  fontWeight: '500'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {titleError}
+              </div>
+            )}
+          </div>
         ) : (
-          <h3 
-            className="card-title" 
-            style={titleStyle}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              setIsEditingTitle(true);
-            }}
-          >
-            {card.title}
-          </h3>
+          <>
+            {!card.title ? (
+              // For unsaved cards with no title, show different display based on content
+              <div 
+                className="card-title-placeholder"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsEditingTitle(true);
+                }}
+                title="Click to add title"
+              >
+                <span className="unsaved-indicator">📝</span>
+                <span className="placeholder-text">
+                  {(card.content || card.contentPreview) ? 'Click to add title...' : 'Click to add title...'}
+                </span>
+              </div>
+            ) : (
+              <h3 
+                className={`card-title ${!card.title ? 'unsaved-title' : ''}`}
+                style={titleStyle}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsEditingTitle(true);
+                }}
+              >
+                {card.title || ''}
+              </h3>
+            )}
+          </>
         )}
 
         <div className="card-controls">
+          {/* Generation stop button - only show when generating */}
+          {isGenerating && onStopGeneration && (
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStopGeneration();
+              }}
+              title="Stop generation"
+              style={{ 
+                color: '#ef4444',
+                fontWeight: 'bold',
+                fontSize: '12px'
+              }}
+            >
+              ⏹️
+            </button>
+          )}
+          
+          {/* Small save status indicator */}
+          <div 
+            className={`save-status-indicator ${card.title ? 'saved' : 'unsaved'} ${saveIndicatorPulse ? 'pulse' : ''}`}
+            title={card.title ? 'Saved to brain' : 'Unsaved - needs title to be saved'}
+          >
+            <div className="save-dot"></div>
+          </div>
+          
           <button
             type="button"
-            className={`btn btn-small ${isInAIContext ? 'btn-primary' : ''}`}
+            className={`ai-context-button ${isInAIContext ? 'active' : ''}`}
             onClick={(e) => {
               e.stopPropagation();
-              toggleAIContext(cardId);
+              if (card.canBeInAIContext ?? true) {
+                toggleAIContext(cardId);
+              }
             }}
-            title={isInAIContext ? 'Remove from AI context' : 'Add to AI context'}
+            disabled={!(card.canBeInAIContext ?? true)}
+            title={
+              !(card.canBeInAIContext ?? true) 
+                ? `${card.typeInfo?.label || 'This card type'} cannot be used in AI context`
+                : isInAIContext 
+                  ? "Remove from AI context" 
+                  : "Add to AI context"
+            }
           >
             AI
           </button>
@@ -212,6 +397,7 @@ const Card: React.FC<CardProps> = ({
               const content = await loadFullContent();
               setEditContent(content);
               setIsEditingContent(true);
+              // Always show title as editable when editing content
               setIsEditingTitle(true);
             }}
             disabled={isLoadingContent}
@@ -220,22 +406,52 @@ const Card: React.FC<CardProps> = ({
             {isLoadingContent ? '🔄' : '✏️'}
           </button>
           
+          {/* Remove from stream button */}
           <button
             type="button"
             className="btn btn-small"
             onClick={(e) => {
               e.stopPropagation();
-              onDelete(cardId);
+              // Show warning for unsaved cards since they'll be deleted permanently
+              if (!card.title) {
+                if (window.confirm('This unsaved card will be permanently deleted when removed from the stream. Continue?')) {
+                  onDelete(cardId);
+                }
+              } else {
+                onDelete(cardId);
+              }
             }}
-            title="Remove card from stream"
+            title={card.title ? "Remove card from stream (keeps in brain)" : "Remove unsaved card (will be permanently deleted)"}
             style={{ 
-              color: '#ef4444',
+              color: card.title ? '#f59e0b' : '#ef4444',
               fontWeight: 'bold',
-              fontSize: '16px'
+              fontSize: '14px'
             }}
           >
-            ×
+            −
           </button>
+          
+          {/* Delete from brain button (only for saved cards with titles) */}
+          {card.title && onDeleteFromBrain && (
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm('Delete this card completely from the brain? This cannot be undone.')) {
+                  onDeleteFromBrain(cardId);
+                }
+              }}
+              title="Delete card completely from brain"
+              style={{ 
+                color: '#ef4444',
+                fontWeight: 'bold',
+                fontSize: '16px'
+              }}
+            >
+              ×
+            </button>
+          )}
           
           {/* Reordering controls */}
           {(onMoveUp || onMoveDown) && (
@@ -308,7 +524,11 @@ const Card: React.FC<CardProps> = ({
                 <button
                   type="button"
                   className="btn btn-primary btn-small"
-                  onClick={handleContentSubmit}
+                  onClick={async () => {
+                    // Save both title and content
+                    await handleTitleSubmit();
+                    await handleContentSubmit();
+                  }}
                 >
                   Save
                 </button>
@@ -319,6 +539,9 @@ const Card: React.FC<CardProps> = ({
                     const contentToRestore = fullContent || card.content || card.contentPreview || '';
                     setEditContent(contentToRestore);
                     setIsEditingContent(false);
+                    // Also cancel title editing
+                    setEditTitle(card.title || '');
+                    setIsEditingTitle(false);
                   }}
                 >
                   Cancel
@@ -332,6 +555,8 @@ const Card: React.FC<CardProps> = ({
                 const content = await loadFullContent();
                 setEditContent(content);
                 setIsEditingContent(true);
+                // Also enable title editing when double-clicking content
+                setIsEditingTitle(true);
               }}
             >
               {(card.content || card.contentPreview) ? (
@@ -387,9 +612,19 @@ const Card: React.FC<CardProps> = ({
                   )}
                 </>
               ) : (
-                <p style={{ color: '#6b7280', fontStyle: 'italic' }}>
-                  No content yet. Double-click to add content.
-                </p>
+                <div className="empty-content-placeholder">
+                  {!card.title ? (
+                    // For completely empty unsaved cards
+                    <p style={{ color: '#f59e0b', fontStyle: 'italic', textAlign: 'center' }}>
+                      Empty card - Double-click to add content
+                    </p>
+                  ) : (
+                    // For cards with titles but no content
+                    <p style={{ color: '#6b7280', fontStyle: 'italic' }}>
+                      No content yet. Double-click to add content.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -406,7 +641,7 @@ const Card: React.FC<CardProps> = ({
           backgroundColor: '#fafbfc',
           justifyContent: 'center'
         }}>
-          {onAddCardBelow && !showAddInterface && !showCreateInterface && (
+          {onAddCardBelow && !showAddInterface && (
             <button
               type="button"
               className="btn btn-small"
@@ -422,7 +657,7 @@ const Card: React.FC<CardProps> = ({
               📎 Add Card
             </button>
           )}
-          {onCreateCardBelow && !showAddInterface && !showCreateInterface && (
+          {onCreateCardBelow && !showAddInterface && !showGenerateInterface && (
             <button
               type="button"
               className="btn btn-small btn-secondary"
@@ -436,6 +671,22 @@ const Card: React.FC<CardProps> = ({
               }}
             >
               ✨ Create Card
+            </button>
+          )}
+          {onGenerateCardBelow && !showAddInterface && !showGenerateInterface && (
+            <button
+              type="button"
+              className="btn btn-small btn-primary"
+              onClick={() => setShowGenerateInterface(true)}
+              title="Generate new card with AI below this one"
+              style={{ 
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              🤖 Generate Card
             </button>
           )}
         </div>
@@ -452,14 +703,20 @@ const Card: React.FC<CardProps> = ({
         />
       )}
       
-      {/* Inline Card Creation Interface */}
-      {showCreateInterface && onCreateCard && onCancelCreate && (
-        <CardCreateInterface
+      {/* AI Generation Interface */}
+      {showGenerateInterface && onGenerateCardBelow && (
+        <GenerateInterface
           brainId={brainId}
-          onCardCreated={(card) => onCreateCard(card, streamCard.position)}
-          onCancel={onCancelCreate}
+          position={streamCard.position}
+          contextCards={aiContextCards}
+          onGenerate={(prompt, model, position) => {
+            onGenerateCardBelow(position, prompt, model);
+            setShowGenerateInterface(false);
+          }}
+          onCancel={() => setShowGenerateInterface(false)}
         />
       )}
+      
     </div>
   );
 };

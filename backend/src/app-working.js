@@ -152,6 +152,8 @@ try {
   console.log('✅ Card routes loaded');
   app.use('/api/streams', require('./routes/streams'));
   console.log('✅ Stream routes loaded');
+  app.use('/api/ai', require('./routes/ai'));
+  console.log('✅ AI routes loaded');
 } catch (error) {
   console.error('❌ Error loading routes:', error);
   throw error;

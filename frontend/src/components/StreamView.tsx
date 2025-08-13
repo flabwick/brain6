@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Card from './Card';
 import CardSearchInterface from './CardSearchInterface';
-import CardCreateInterface from './CardCreateInterface';
 import { Stream, StreamCard, Card as CardType } from '../types';
 import api from '../services/api';
 import { useApp } from '../contexts/AppContext';
@@ -17,8 +16,9 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeCardIdForAdd, setActiveCardIdForAdd] = useState<string | null>(null);
-  const [activeCardIdForCreate, setActiveCardIdForCreate] = useState<string | null>(null);
-  const { setError: setGlobalError } = useApp();
+  const [generatingCardId, setGeneratingCardId] = useState<string | null>(null);
+  const [generationController, setGenerationController] = useState<AbortController | null>(null);
+  const { setError: setGlobalError, aiContextCards } = useApp();
 
   useEffect(() => {
     loadStream();
@@ -47,10 +47,31 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
 
   const handleUpdateCard = async (cardId: string, updates: Partial<CardType>) => {
     try {
-      await api.put(`/cards/${cardId}`, updates);
+      // Store original state for potential revert
+      const originalStreamCards = [...streamCards];
       
-      // Refresh the stream to get latest data from server
-      await loadStream();
+      // Optimistically update the UI immediately
+      const newStreamCards = streamCards.map(streamCard => {
+        const currentCardId = streamCard.cardId || streamCard.id;
+        if (currentCardId === cardId) {
+          return {
+            ...streamCard,
+            ...updates
+          };
+        }
+        return streamCard;
+      });
+      setStreamCards(newStreamCards);
+      
+      // Update server in background
+      try {
+        await api.put(`/cards/${cardId}`, updates);
+        // Server updated successfully, optimistic update was correct
+      } catch (serverError) {
+        // Revert optimistic update on server error
+        setStreamCards(originalStreamCards);
+        throw serverError;
+      }
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to update card';
       setGlobalError(errorMessage);
@@ -59,13 +80,44 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
 
   const handleDeleteCard = async (cardId: string) => {
     try {
-      // Remove card from stream (card remains in brain)
-      await api.delete(`/streams/${streamId}/cards/${cardId}`);
+      // Optimistically remove card from UI immediately
+      const originalStreamCards = streamCards;
+      const newStreamCards = streamCards.filter(sc => (sc.cardId || sc.id) !== cardId);
+      setStreamCards(newStreamCards);
       
-      // Refresh the stream to reflect the removal
-      await loadStream();
+      // Update server in background
+      try {
+        await api.delete(`/streams/${streamId}/cards/${cardId}`);
+        // Server updated successfully, optimistic update was correct
+      } catch (serverError) {
+        // Revert optimistic update on server error
+        setStreamCards(originalStreamCards);
+        throw serverError;
+      }
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to remove card from stream';
+      setGlobalError(errorMessage);
+    }
+  };
+
+  const handleDeleteCardFromBrain = async (cardId: string) => {
+    try {
+      // Optimistically remove card from UI immediately
+      const originalStreamCards = streamCards;
+      const newStreamCards = streamCards.filter(sc => (sc.cardId || sc.id) !== cardId);
+      setStreamCards(newStreamCards);
+      
+      // Update server in background - use hard delete to completely remove from brain
+      try {
+        await api.delete(`/cards/${cardId}?hard=true`);
+        // Server updated successfully, optimistic update was correct
+      } catch (serverError) {
+        // Revert optimistic update on server error
+        setStreamCards(originalStreamCards);
+        throw serverError;
+      }
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to delete card from brain';
       setGlobalError(errorMessage);
     }
   };
@@ -75,14 +127,27 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
       const streamCard = streamCards.find(sc => sc.id === streamCardId);
       if (!streamCard) return;
 
-      const newCollapsedState = !streamCard.isCollapsed;
-      
-      await api.put(`/streams/${streamId}/cards/${streamCardId}`, {
-        isCollapsed: newCollapsedState
+      // Optimistically update the UI immediately
+      const originalStreamCards = streamCards;
+      const newStreamCards = streamCards.map(sc => {
+        if (sc.id === streamCardId) {
+          return { ...sc, isCollapsed: !sc.isCollapsed };
+        }
+        return sc;
       });
+      setStreamCards(newStreamCards);
 
-      // Refresh the stream to reflect the collapse state change
-      await loadStream();
+      // Update server in background
+      try {
+        await api.put(`/streams/${streamId}/cards/${streamCardId}`, {
+          isCollapsed: !streamCard.isCollapsed
+        });
+        // Server updated successfully, optimistic update was correct
+      } catch (serverError) {
+        // Revert optimistic update on server error
+        setStreamCards(originalStreamCards);
+        throw serverError;
+      }
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to toggle card collapse';
       setGlobalError(errorMessage);
@@ -95,15 +160,48 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
     const cardAtPosition = streamCards.find(sc => sc.position === afterPosition);
     if (cardAtPosition) {
       setActiveCardIdForAdd(cardAtPosition.cardId || cardAtPosition.id || '');
-      setActiveCardIdForCreate(null); // Close any create interface
     }
   };
 
-  const handleCreateCardBelow = (afterPosition: number) => {
-    const cardAtPosition = streamCards.find(sc => sc.position === afterPosition);
-    if (cardAtPosition) {
-      setActiveCardIdForCreate(cardAtPosition.cardId || cardAtPosition.id || '');
-      setActiveCardIdForAdd(null); // Close any add interface
+  const handleCreateCardBelow = async (afterPosition: number) => {
+    try {
+      // Calculate position for new card
+      const nextPosition = afterPosition + 1;
+      
+      // Create empty unsaved card immediately
+      const response = await api.post('/cards/create-empty', {
+        brainId: brainId,
+        streamId: streamId,
+        position: nextPosition
+      });
+
+      // Close any interfaces
+      setActiveCardIdForAdd(null);
+      
+      // Save scroll position before reload
+      const scrollPosition = window.scrollY;
+      
+      // Reload stream to show new card
+      await loadStream();
+      
+      // Restore scroll position and auto-focus the new card for editing
+      setTimeout(() => {
+        // Restore scroll position
+        window.scrollTo(0, scrollPosition);
+        
+        const newCardElement = document.querySelector(`[data-card-id="${response.data.card.id}"]`);
+        if (newCardElement) {
+          // Trigger edit mode by clicking the title (which opens edit)
+          const titleElement = newCardElement.querySelector('.card-title');
+          if (titleElement) {
+            (titleElement as HTMLElement).click();
+          }
+        }
+      }, 100);
+      
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to create card';
+      setGlobalError(errorMessage);
     }
   };
 
@@ -115,25 +213,26 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
       const currentCard = streamCards[currentIndex];
       const targetCard = streamCards[currentIndex - 1];
 
-      // Swap positions: use negative temp position to avoid validation limits
-      const tempPosition = -1;
+      // Store original state for potential revert
+      const originalStreamCards = [...streamCards];
 
-      // First move current card to temp position
-      await api.put(`/streams/${streamId}/cards/${cardId}`, {
-        position: tempPosition
-      });
+      // Optimistically update the UI immediately
+      const newStreamCards = [...streamCards];
+      newStreamCards[currentIndex] = targetCard;
+      newStreamCards[currentIndex - 1] = currentCard;
+      setStreamCards(newStreamCards);
 
-      // Move target card to current card's position
-      await api.put(`/streams/${streamId}/cards/${targetCard.cardId || targetCard.id}`, {
-        position: currentCard.position
-      });
-
-      // Move current card to target card's position
-      await api.put(`/streams/${streamId}/cards/${cardId}`, {
-        position: targetCard.position
-      });
-
-      await loadStream();
+      // Update server in background
+      try {
+        await api.put(`/streams/${streamId}/cards/${cardId}`, {
+          position: targetCard.position
+        });
+        // Server updated successfully, optimistic update was correct
+      } catch (serverError) {
+        // Revert optimistic update on server error
+        setStreamCards(originalStreamCards);
+        throw serverError;
+      }
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to move card';
       setGlobalError(errorMessage);
@@ -148,25 +247,26 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
       const currentCard = streamCards[currentIndex];
       const targetCard = streamCards[currentIndex + 1];
 
-      // Swap positions: use negative temp position to avoid validation limits
-      const tempPosition = -1;
+      // Store original state for potential revert
+      const originalStreamCards = [...streamCards];
 
-      // First move current card to temp position
-      await api.put(`/streams/${streamId}/cards/${cardId}`, {
-        position: tempPosition
-      });
+      // Optimistically update the UI immediately
+      const newStreamCards = [...streamCards];
+      newStreamCards[currentIndex] = targetCard;
+      newStreamCards[currentIndex + 1] = currentCard;
+      setStreamCards(newStreamCards);
 
-      // Move target card to current card's position
-      await api.put(`/streams/${streamId}/cards/${targetCard.cardId || targetCard.id}`, {
-        position: currentCard.position
-      });
-
-      // Move current card to target card's position
-      await api.put(`/streams/${streamId}/cards/${cardId}`, {
-        position: targetCard.position
-      });
-
-      await loadStream();
+      // Update server in background
+      try {
+        await api.put(`/streams/${streamId}/cards/${cardId}`, {
+          position: targetCard.position
+        });
+        // Server updated successfully, optimistic update was correct
+      } catch (serverError) {
+        // Revert optimistic update on server error
+        setStreamCards(originalStreamCards);
+        throw serverError;
+      }
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to move card';
       setGlobalError(errorMessage);
@@ -176,6 +276,9 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
   // Inline interface handlers
   const handleInlineAddCard = async (cardId: string, insertAfterPosition: number | null) => {
     try {
+      // Save scroll position before operation
+      const scrollPosition = window.scrollY;
+      
       const requestBody: any = {
         cardId: cardId,
         isInAIContext: false,
@@ -191,41 +294,226 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
 
       setActiveCardIdForAdd(null);
       await loadStream();
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || 'Failed to add card to stream';
-      setGlobalError(errorMessage);
-    }
-  };
-
-  const handleInlineCreateCard = async (card: CardType, insertAfterPosition: number | null) => {
-    try {
-      const requestBody: any = {
-        cardId: card.id,
-        isInAIContext: false,
-        isCollapsed: false
-      };
       
-      // Only add position if it's not null (null means add at end)
-      if (insertAfterPosition !== null) {
-        requestBody.position = insertAfterPosition;
-      }
-
-      await api.post(`/streams/${streamId}/cards`, requestBody);
-
-      setActiveCardIdForCreate(null);
-      await loadStream();
+      // Restore scroll position after reload
+      setTimeout(() => {
+        window.scrollTo(0, scrollPosition);
+      }, 50);
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to add card to stream';
       setGlobalError(errorMessage);
     }
   };
+
 
   const handleCancelAdd = () => {
     setActiveCardIdForAdd(null);
   };
 
-  const handleCancelCreate = () => {
-    setActiveCardIdForCreate(null);
+  const handleGenerateCardBelow = async (afterPosition: number, prompt: string, model: string) => {
+    try {
+      // Create empty unsaved card for streaming content
+      // Insert after the triggering card position
+      const response = await api.post('/cards/create-empty', {
+        brainId: brainId,
+        streamId: streamId,
+        insertAfterPosition: afterPosition
+      });
+
+      const newCardId = response.data.card.id;
+      setGeneratingCardId(newCardId);
+
+      // Reload stream to show new card
+      await loadStream();
+
+      // Start real AI generation with streaming
+      const controller = new AbortController();
+      setGenerationController(controller);
+
+      // Start AI generation using Server-Sent Events
+      try {
+        // First, initiate the generation via POST
+        const initResponse = await api.post('/ai/generate-streaming', {
+          brainId,
+          streamId,
+          cardId: newCardId,
+          prompt,
+          model,
+          contextCardIds: aiContextCards
+        });
+
+        console.log('🔍 AI generation initiated:', initResponse.status);
+
+        // Then connect to the streaming endpoint using EventSource
+        const eventSourceUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:3001/api'}/ai/stream/${newCardId}`;
+        
+        const eventSource = new EventSource(eventSourceUrl, {
+          withCredentials: true
+        });
+
+        console.log(`🤖 Starting AI generation with ${model}`);
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            
+            switch (data.type) {
+              case 'start':
+                console.log(`🤖 Starting AI generation with ${data.model}`);
+                break;
+                
+              case 'chunk':
+                // Update local state with new content
+                setStreamCards(prev => prev.map(sc => 
+                  sc.id === newCardId || (sc as any).cardId === newCardId
+                    ? { ...sc, content: data.totalContent, contentPreview: data.totalContent }
+                    : sc
+                ));
+                break;
+                
+              case 'complete':
+                console.log('✅ AI generation completed');
+                setGeneratingCardId(null);
+                setGenerationController(null);
+                eventSource.close();
+                return;
+                
+              case 'error':
+                console.error('❌ AI generation error:', data.message);
+                setGlobalError(`AI generation failed: ${data.message}`);
+                setGeneratingCardId(null);
+                setGenerationController(null);
+                eventSource.close();
+                return;
+            }
+          } catch (error) {
+            console.error('Error parsing AI stream data:', error);
+          }
+        };
+
+        eventSource.onerror = (error) => {
+          console.error('EventSource error:', error);
+          setGlobalError('AI generation connection failed');
+          setGeneratingCardId(null);
+          setGenerationController(null);
+          eventSource.close();
+        };
+
+        // Handle cancellation
+        controller.signal.addEventListener('abort', () => {
+          eventSource.close();
+          setGeneratingCardId(null);
+          setGenerationController(null);
+        });
+      } catch (fetchError: any) {
+        if (fetchError.name === 'AbortError') {
+          console.log('AI generation cancelled by user');
+        } else {
+          console.error('AI generation fetch error:', fetchError);
+          console.error('Error details:', {
+            message: fetchError.message,
+            name: fetchError.name,
+            status: fetchError.status
+          });
+          console.log('🔄 Falling back to simulation mode...');
+          
+          // Fallback to simulation mode
+          const aiResponse = `This is a simulated AI response to: "${prompt}"
+
+This content is being generated word by word to demonstrate the streaming functionality. Each word appears gradually to show how the system will work when connected to real AI models.
+
+The system supports:
+- Multiple AI model selection (${model})
+- Real-time content streaming
+- Ability to stop generation midway
+- Automatic card creation in expanded form
+- Context-aware responses based on selected cards
+
+Note: Real AI integration requires proper nginx configuration to forward /api/ai/ requests to the backend server.`;
+
+          // Stream the content word by word (simulation)
+          const words = aiResponse.split(' ');
+          let currentContent = '';
+          
+          for (let i = 0; i < words.length; i++) {
+            if (controller.signal.aborted) {
+              break;
+            }
+            
+            currentContent += (i > 0 ? ' ' : '') + words[i];
+            
+            // Update the card content
+            await api.put(`/cards/${newCardId}`, { content: currentContent });
+            
+            // Update local state to reflect changes
+            setStreamCards(prev => prev.map(sc => 
+              sc.id === newCardId || (sc as any).cardId === newCardId
+                ? { ...sc, content: currentContent, contentPreview: currentContent }
+                : sc
+            ));
+            
+            // Wait a bit to simulate streaming
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        }
+        setGeneratingCardId(null);
+        setGenerationController(null);
+      }
+      
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to generate card';
+      setGlobalError(errorMessage);
+      setGeneratingCardId(null);
+      setGenerationController(null);
+    }
+  };
+
+  const handleStopGeneration = () => {
+    if (generationController) {
+      generationController.abort();
+      setGeneratingCardId(null);
+      setGenerationController(null);
+    }
+  };
+
+
+  const handleCreateCardForEmptyStream = async () => {
+    try {
+      // Create empty unsaved card immediately at position 0
+      const response = await api.post('/cards/create-empty', {
+        brainId: brainId,
+        streamId: streamId,
+        position: 0
+      });
+
+      // Close any interfaces
+      setActiveCardIdForAdd(null);
+      
+      // Save scroll position before reload
+      const scrollPosition = window.scrollY;
+      
+      // Reload stream to show new card
+      await loadStream();
+      
+      // Restore scroll position and auto-focus the new card for editing
+      setTimeout(() => {
+        // Restore scroll position
+        window.scrollTo(0, scrollPosition);
+        
+        const newCardElement = document.querySelector(`[data-card-id="${response.data.card.id}"]`);
+        if (newCardElement) {
+          // Trigger edit mode by clicking the title (which opens edit)
+          const titleElement = newCardElement.querySelector('.card-title');
+          if (titleElement) {
+            (titleElement as HTMLElement).click();
+          }
+        }
+      }, 100);
+      
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to create card';
+      setGlobalError(errorMessage);
+    }
   };
 
   if (isLoading) {
@@ -316,19 +604,20 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
             brainId={brainId}
             onUpdate={handleUpdateCard}
             onDelete={handleDeleteCard}
+            onDeleteFromBrain={handleDeleteCardFromBrain}
             onToggleCollapse={handleToggleCollapse}
             onAddCardBelow={handleAddCardBelow}
             onCreateCardBelow={handleCreateCardBelow}
+            onGenerateCardBelow={handleGenerateCardBelow}
+            isGenerating={generatingCardId === cardId}
+            onStopGeneration={handleStopGeneration}
             onMoveUp={handleMoveUp}
             onMoveDown={handleMoveDown}
             isFirst={index === 0}
             isLast={index === streamCards.length - 1}
             showAddInterface={activeCardIdForAdd === cardId}
-            showCreateInterface={activeCardIdForCreate === cardId}
             onAddCard={handleInlineAddCard}
-            onCreateCard={handleInlineCreateCard}
             onCancelAdd={handleCancelAdd}
-            onCancelCreate={handleCancelCreate}
           />
         );
       })}
@@ -346,7 +635,7 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
               📎 Add Card
             </button>
             <button
-              onClick={() => setActiveCardIdForCreate('empty-stream')}
+              onClick={handleCreateCardForEmptyStream}
               className="btn btn-secondary btn-small"
               title="Create a new card in this brain"
             >
@@ -367,13 +656,6 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
         />
       )}
       
-      {streamCards.length === 0 && activeCardIdForCreate === 'empty-stream' && (
-        <CardCreateInterface
-          brainId={brainId}
-          onCardCreated={(card) => handleInlineCreateCard(card, null)}
-          onCancel={handleCancelCreate}
-        />
-      )}
     </div>
   );
 };

@@ -9,6 +9,7 @@ const Brain = require('../models/Brain');
 const { requireAuth } = require('../middleware/auth');
 const cardProcessor = require('../services/cardProcessor');
 const linkParser = require('../services/linkParser');
+const CardFactory = require('../services/CardFactory');
 
 // All card routes require authentication
 router.use(requireAuth);
@@ -38,17 +39,38 @@ const validateUUID = (id) => {
   return uuidRegex.test(id);
 };
 
-const validateCardInput = (title, content = '') => {
+const validateCardInput = (title, content = '', cardType = 'saved', options = {}) => {
   const errors = {};
   
-  if (!title || typeof title !== 'string' || title.trim().length === 0) {
-    errors.title = 'Card title is required';
-  } else if (title.length > 200) {
+  // Validate card type
+  if (!['saved', 'file', 'unsaved'].includes(cardType)) {
+    errors.cardType = 'Invalid card type. Must be saved, file, or unsaved';
+  }
+  
+  // Title validation based on card type
+  if (cardType === 'saved' && (!title || typeof title !== 'string' || title.trim().length === 0)) {
+    errors.title = 'Card title is required for saved cards';
+  } else if (title && title.length > 200) {
     errors.title = 'Card title cannot exceed 200 characters';
   }
   
+  // Unsaved cards can have no title or empty title
+  if (cardType === 'unsaved' && title !== undefined && title !== null && typeof title !== 'string') {
+    errors.title = 'Card title must be a string if provided';
+  }
+  
+  // Content validation
   if (content && typeof content !== 'string') {
     errors.content = 'Card content must be a string';
+  }
+  
+  // Type-specific validation
+  if (cardType === 'unsaved' && !options.streamId) {
+    errors.streamId = 'Stream ID is required for unsaved cards';
+  }
+  
+  if (cardType === 'file' && !options.fileId) {
+    errors.fileId = 'File ID is required for file cards';
   }
   
   return {
@@ -143,14 +165,14 @@ router.get('/:id', async (req, res) => {
 
 /**
  * POST /api/cards
- * Create new card from content
+ * Create new card from content with type support
  */
 router.post('/', async (req, res) => {
   try {
-    const { title, content = '', brainId } = req.body;
+    const { title, content = '', brainId, cardType = 'saved', streamId, fileId } = req.body;
     
     // Validate input
-    const validation = validateCardInput(title, content);
+    const validation = validateCardInput(title, content, cardType, { streamId, fileId });
     if (!validation.isValid) {
       return res.status(400).json({
         error: 'Validation failed',
@@ -176,24 +198,54 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Create card using card processor
-    const result = await cardProcessor.createCardFromContent(brainId, title.trim(), content);
-    
-    if (!result.success) {
+    let card;
+
+    // Create card using CardFactory based on type
+    try {
+      switch (cardType) {
+        case 'saved':
+          card = await CardFactory.createSavedCard(brainId, title.trim(), content);
+          break;
+          
+        case 'unsaved':
+          card = await CardFactory.createUnsavedCard(brainId, streamId, content);
+          break;
+          
+        case 'file':
+          card = await CardFactory.createFileCard(brainId, fileId, title.trim(), {
+            content: content,
+            contentPreview: content.substring(0, 500)
+          });
+          break;
+          
+        default:
+          // Fallback to old method for compatibility
+          const result = await cardProcessor.createCardFromContent(brainId, title.trim(), content);
+          if (!result.success) {
+            return res.status(400).json({
+              error: 'Failed to create card',
+              message: result.error
+            });
+          }
+          card = result.card;
+      }
+    } catch (createError) {
       return res.status(400).json({
         error: 'Failed to create card',
-        message: result.error
+        message: createError.message
       });
     }
 
-    // Process links in the content
-    await linkParser.processCardLinks(result.card.id, content);
+    // Process links in the content (only for cards with content)
+    if (content && content.trim()) {
+      await linkParser.processCardLinks(card.id, content);
+    }
 
-    const cardData = await result.card.toJSON(true);
+    const cardData = await card.toJSON(true);
 
     res.status(201).json({
       card: cardData,
-      message: 'Card created successfully'
+      message: `${cardData.typeInfo.label} created successfully`
     });
 
   } catch (error) {
@@ -637,6 +689,377 @@ router.post('/:id/sync', async (req, res) => {
     res.status(500).json({
       error: 'Failed to sync card',
       message: 'An error occurred while syncing the card'
+    });
+  }
+});
+
+/**
+ * POST /api/cards/:id/convert-to-saved
+ * Convert unsaved card to saved card
+ */
+router.post('/:id/convert-to-saved', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title } = req.body;
+    
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid card ID',
+        message: 'Card ID must be a valid UUID'
+      });
+    }
+
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      return res.status(400).json({
+        error: 'Invalid title',
+        message: 'Title is required to convert unsaved card to saved'
+      });
+    }
+
+    const validation = await validateCardOwnership(id, req.session.userId);
+    if (!validation.valid) {
+      const status = validation.error === 'Card not found' ? 404 : 403;
+      return res.status(status).json({
+        error: validation.error,
+        message: `Cannot convert card: ${validation.error}`
+      });
+    }
+
+    const card = validation.card;
+
+    if (card.cardType !== 'unsaved') {
+      return res.status(400).json({
+        error: 'Invalid operation',
+        message: 'Only unsaved cards can be converted to saved'
+      });
+    }
+
+    // Convert using CardFactory
+    await CardFactory.convertUnsavedToSaved(id, title.trim());
+
+    // Refresh card data
+    const updatedCard = await Card.findById(id);
+    const cardData = await updatedCard.toJSON(true);
+
+    res.json({
+      card: cardData,
+      message: `Card successfully converted to saved: ${title.trim()}`
+    });
+
+  } catch (error) {
+    console.error('❌ Convert card error:', error);
+    res.status(500).json({
+      error: 'Failed to convert card',
+      message: error.message || 'An error occurred while converting the card'
+    });
+  }
+});
+
+/**
+ * GET /api/cards/by-type/:brainId/:cardType
+ * Get cards by type within a brain
+ */
+router.get('/by-type/:brainId/:cardType', async (req, res) => {
+  try {
+    const { brainId, cardType } = req.params;
+    const { limit, offset, orderBy } = req.query;
+    
+    if (!validateUUID(brainId)) {
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'Brain ID must be a valid UUID'
+      });
+    }
+
+    if (!['saved', 'file', 'unsaved'].includes(cardType)) {
+      return res.status(400).json({
+        error: 'Invalid card type',
+        message: 'Card type must be saved, file, or unsaved'
+      });
+    }
+
+    // Validate brain ownership
+    const brainValidation = await validateBrainOwnership(brainId, req.session.userId);
+    if (!brainValidation.valid) {
+      const status = brainValidation.error === 'Brain not found' ? 404 : 403;
+      return res.status(status).json({
+        error: brainValidation.error,
+        message: `Cannot access cards: ${brainValidation.error}`
+      });
+    }
+
+    const options = {};
+    if (limit) options.limit = parseInt(limit);
+    if (offset) options.offset = parseInt(offset);
+    if (orderBy) options.orderBy = orderBy;
+
+    const cards = await Card.findByType(brainId, cardType, options);
+    
+    // Convert cards to JSON format
+    const cardData = await Promise.all(
+      cards.map(card => card.toJSON(false)) // Don't include full content by default
+    );
+
+    res.json({
+      cards: cardData,
+      total: cardData.length,
+      cardType: cardType,
+      brainId: brainId
+    });
+
+  } catch (error) {
+    console.error('❌ Get cards by type error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve cards',
+      message: 'An error occurred while fetching cards by type'
+    });
+  }
+});
+
+/**
+ * GET /api/cards/statistics/:brainId
+ * Get card type statistics for a brain
+ */
+router.get('/statistics/:brainId', async (req, res) => {
+  try {
+    const { brainId } = req.params;
+    
+    if (!validateUUID(brainId)) {
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'Brain ID must be a valid UUID'
+      });
+    }
+
+    // Validate brain ownership
+    const brainValidation = await validateBrainOwnership(brainId, req.session.userId);
+    if (!brainValidation.valid) {
+      const status = brainValidation.error === 'Brain not found' ? 404 : 403;
+      return res.status(status).json({
+        error: brainValidation.error,
+        message: `Cannot access statistics: ${brainValidation.error}`
+      });
+    }
+
+    const statistics = await Card.getTypeStatistics(brainId);
+
+    res.json({
+      brainId: brainId,
+      statistics: statistics,
+      summary: {
+        totalCards: statistics.total,
+        distribution: {
+          saved: {
+            count: statistics.saved,
+            percentage: statistics.total > 0 ? Math.round((statistics.saved / statistics.total) * 100) : 0
+          },
+          file: {
+            count: statistics.file,
+            percentage: statistics.total > 0 ? Math.round((statistics.file / statistics.total) * 100) : 0
+          },
+          unsaved: {
+            count: statistics.unsaved,
+            percentage: statistics.total > 0 ? Math.round((statistics.unsaved / statistics.total) * 100) : 0
+          }
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Get card statistics error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve statistics',
+      message: 'An error occurred while fetching card statistics'
+    });
+  }
+});
+
+/**
+ * POST /api/cards/ai-generate
+ * Generate AI card (creates unsaved card)
+ */
+router.post('/ai-generate', async (req, res) => {
+  try {
+    const { brainId, streamId, generatedContent } = req.body;
+    
+    if (!brainId || !validateUUID(brainId)) {
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'A valid brain ID is required'
+      });
+    }
+
+    if (!streamId || !validateUUID(streamId)) {
+      return res.status(400).json({
+        error: 'Invalid stream ID',
+        message: 'A valid stream ID is required for AI-generated cards'
+      });
+    }
+
+    if (!generatedContent || typeof generatedContent !== 'string' || generatedContent.trim().length === 0) {
+      return res.status(400).json({
+        error: 'Invalid content',
+        message: 'Generated content is required'
+      });
+    }
+
+    // Validate brain ownership
+    const brainValidation = await validateBrainOwnership(brainId, req.session.userId);
+    if (!brainValidation.valid) {
+      const status = brainValidation.error === 'Brain not found' ? 404 : 403;
+      return res.status(status).json({
+        error: brainValidation.error,
+        message: `Cannot create AI card: ${brainValidation.error}`
+      });
+    }
+
+    // Create AI-generated unsaved card
+    const card = await CardFactory.createFromAIGeneration(brainId, streamId, generatedContent);
+
+    // Process any links in the generated content
+    if (generatedContent.includes('[[')) {
+      await linkParser.processCardLinks(card.id, generatedContent);
+    }
+
+    const cardData = await card.toJSON(true);
+
+    res.status(201).json({
+      card: cardData,
+      message: 'AI-generated card created successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ AI generate card error:', error);
+    res.status(500).json({
+      error: 'Failed to create AI card',
+      message: error.message || 'An error occurred while creating AI-generated card'
+    });
+  }
+});
+
+/**
+ * POST /api/cards/create-empty
+ * Create empty unsaved card for immediate editing (streamlined flow)
+ */
+router.post('/create-empty', async (req, res) => {
+  try {
+    const { brainId, streamId, position, insertAfterPosition } = req.body;
+    
+    if (!brainId || !validateUUID(brainId)) {
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'A valid brain ID is required'
+      });
+    }
+
+    if (!streamId || !validateUUID(streamId)) {
+      return res.status(400).json({
+        error: 'Invalid stream ID',
+        message: 'A valid stream ID is required'
+      });
+    }
+
+    // Validate brain ownership
+    const brainValidation = await validateBrainOwnership(brainId, req.session.userId);
+    if (!brainValidation.valid) {
+      const status = brainValidation.error === 'Brain not found' ? 404 : 403;
+      return res.status(status).json({
+        error: brainValidation.error,
+        message: `Cannot create card: ${brainValidation.error}`
+      });
+    }
+
+    // Create empty unsaved card for immediate editing
+    // Use insertAfterPosition if provided, otherwise use position
+    const insertPosition = insertAfterPosition !== undefined ? insertAfterPosition : position;
+    const card = await CardFactory.createEmptyUnsavedCard(brainId, streamId, insertPosition, insertAfterPosition !== undefined);
+
+    const cardData = await card.toJSON(true);
+
+    res.status(201).json({
+      card: cardData,
+      message: 'Empty card created successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Create empty card error:', error);
+    res.status(500).json({
+      error: 'Failed to create empty card',
+      message: error.message || 'An error occurred while creating the empty card'
+    });
+  }
+});
+
+/**
+ * PUT /api/cards/:id/update-with-title
+ * Update card content and optionally add title (for unsaved card conversion)
+ */
+router.put('/:id/update-with-title', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, content } = req.body;
+    
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid card ID',
+        message: 'Card ID must be a valid UUID'
+      });
+    }
+
+    const validation = await validateCardOwnership(id, req.session.userId);
+    if (!validation.valid) {
+      const status = validation.error === 'Card not found' ? 404 : 403;
+      return res.status(status).json({
+        error: validation.error,
+        message: `Cannot update card: ${validation.error}`
+      });
+    }
+
+    const card = validation.card;
+
+    // Update content if provided
+    if (content !== undefined) {
+      await card.updateContent(content);
+    }
+
+    // If title is provided and not empty, update it (and auto-convert unsaved to saved)
+    if (title !== undefined && title !== null && typeof title === 'string' && title.trim && title.trim() !== '') {
+      const trimmedTitle = title.trim();
+      if (card.cardType === 'unsaved') {
+        // This will trigger the database trigger to convert to saved
+        await card.update({ title: trimmedTitle });
+      } else {
+        await card.update({ title: trimmedTitle });
+      }
+    }
+
+    // Process links in the content if updated
+    if (content && content.includes('[[')) {
+      await linkParser.processCardLinks(card.id, content);
+    }
+
+    // Refresh card data to get updated state
+    const updatedCard = await Card.findById(id);
+    const cardData = await updatedCard.toJSON(true);
+
+    res.json({
+      card: cardData,
+      message: updatedCard.cardType === 'saved' ? 'Card saved to brain' : 'Card updated'
+    });
+
+  } catch (error) {
+    console.error('❌ Update card with title error:', error);
+    
+    if (error.message.includes('already exists')) {
+      return res.status(409).json({
+        error: 'Card title already exists',
+        message: error.message
+      });
+    }
+    
+    res.status(500).json({
+      error: 'Failed to update card',
+      message: error.message || 'An error occurred while updating the card'
     });
   }
 });

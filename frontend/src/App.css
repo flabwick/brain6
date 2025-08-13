@@ -11,10 +11,20 @@
   --text-primary: #111827;
   --border-strong: #374151;
   --border-medium: #d1d5db;
-  --ai-context-bg: #e0e7ff;
-  --ai-context-border: #6366f1;
+  --ai-context-bg: #312e81;
+  --ai-context-border: #4c1d95;
   --hover-bg: #f3f4f6;
   --focus-ring: #3b82f6;
+  
+  /* Card Type System colors */
+  --saved-card-bg: #ffffff;
+  --file-card-bg: #f8f9fa;
+  --unsaved-card-bg: #f1f5f9;
+  --saved-card-border: #d1d5db;
+  --file-card-border: #9ca3af;
+  --unsaved-card-border: #94a3b8;
+  --unsaved-accent: #64748b;
+  --file-accent: #6366f1;
   --error-bg: #fef2f2;
   --error-border: #ef4444;
   --error-text: #dc2626;
@@ -25,7 +35,7 @@
   /* Typography */
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-size-stream-title: 15px;
-  --font-size-card-title: 15px;
+  --font-size-card-title: 18px;
   --font-size-body: 14px;
   --font-size-button: 11px;
   --font-weight-title: 600;
@@ -190,13 +200,241 @@ body {
 
 /* Card styles */
 .card {
-  background-color: var(--bg-card);
-  border: var(--border-width-medium) solid var(--border-medium);
+  background-color: var(--saved-card-bg);
+  border: var(--border-width-medium) solid var(--saved-card-border);
   border-radius: var(--border-radius);
   padding: var(--spacing-lg);
   margin-bottom: var(--spacing-md);
   max-width: var(--card-max-width);
+  position: relative;
 }
+
+/* Card Type System styles */
+.card-saved {
+  background-color: var(--saved-card-bg);
+  border: var(--border-width-medium) solid var(--saved-card-border);
+}
+
+.card-file {
+  background-color: var(--file-card-bg);
+  border: var(--border-width-medium) solid var(--file-card-border);
+  border-left: 4px solid var(--file-accent);
+}
+
+.card-unsaved {
+  background-color: var(--unsaved-card-bg);
+  border: var(--border-width-medium) dashed var(--unsaved-card-border);
+  position: relative;
+  box-shadow: 0 0 0 1px rgba(100, 116, 139, 0.2);
+  animation: subtle-pulse 3s ease-in-out infinite;
+}
+
+/* Special styling for unsaved cards with no title */
+.card-unsaved:has(.card-title-placeholder) {
+  background-color: var(--unsaved-card-bg);
+  border-style: dashed;
+  opacity: 0.9;
+}
+
+/* Extra minimal styling for completely empty unsaved cards */
+.card-unsaved:has(.card-title-placeholder):has(.empty-content-placeholder) {
+  background-color: #e2e8f0;
+  border-color: rgba(100, 116, 139, 0.4);
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.card-unsaved::before {
+  content: "UNSAVED";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--unsaved-accent);
+  background-color: rgba(100, 116, 139, 0.1);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+/* Hide UNSAVED indicator for cards with title placeholder */
+.card-unsaved:has(.card-title-placeholder)::before {
+  display: none;
+}
+
+/* Minimalist save status indicator */
+.save-status-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: var(--spacing-xs);
+}
+
+.save-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.save-status-indicator.saved .save-dot {
+  background-color: var(--success-border);
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
+}
+
+.save-status-indicator.unsaved .save-dot {
+  background-color: #9ca3af;
+  opacity: 0.8;
+}
+
+.save-status-indicator:hover .save-dot {
+  transform: scale(1.2);
+}
+
+.save-status-indicator.pulse .save-dot {
+  animation: save-pulse 1s ease-out;
+}
+
+@keyframes save-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
+  }
+  50% {
+    transform: scale(1.4);
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.8);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
+  }
+}
+
+.card-type-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: var(--border-radius);
+  margin-left: var(--spacing-xs);
+}
+
+.card-type-indicator.unsaved {
+  color: var(--unsaved-accent);
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
+.card-type-indicator.file {
+  color: var(--file-accent);
+  background-color: rgba(99, 102, 241, 0.1);
+}
+
+/* Card title editing states */
+.card-title-editable.unsaved::placeholder {
+  color: var(--unsaved-accent);
+  opacity: 0.7;
+}
+
+.card-title-button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-title);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex: 1;
+}
+
+.card-title-button:hover {
+  color: var(--focus-ring);
+}
+
+.card-title-button.unsaved {
+  color: var(--unsaved-accent);
+  font-style: italic;
+}
+
+.card-title-button.unsaved:hover {
+  color: var(--text-primary);
+}
+
+.unsaved-title {
+  color: var(--unsaved-accent);
+  font-style: italic;
+  cursor: pointer;
+}
+
+.unsaved-title:hover {
+  color: var(--text-primary);
+}
+
+/* Card title placeholder for unsaved cards with no title */
+.card-title-placeholder {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  cursor: pointer;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius);
+  transition: background-color 0.15s ease;
+  flex: 1;
+}
+
+.card-title-placeholder:hover {
+  background-color: rgba(100, 116, 139, 0.1);
+}
+
+
+.unsaved-indicator {
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.placeholder-text {
+  color: var(--unsaved-accent);
+  font-style: italic;
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-title);
+  opacity: 0.7;
+}
+
+.placeholder-text:hover {
+  opacity: 1;
+}
+
+/* Empty content placeholder styling */
+.empty-content-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  border: 2px dashed rgba(100, 116, 139, 0.3);
+  border-radius: var(--border-radius);
+  margin: var(--spacing-sm) 0;
+  transition: border-color 0.15s ease;
+}
+
+.card-unsaved:has(.card-title-placeholder) .empty-content-placeholder {
+  border-color: rgba(100, 116, 139, 0.4);
+  background-color: rgba(226, 232, 240, 0.5);
+}
+
+.empty-content-placeholder:hover {
+  border-color: rgba(100, 116, 139, 0.6);
+}
+
+
 
 .card-header {
   display: flex;
@@ -259,22 +497,71 @@ body {
   left: 0;
   right: 0;
   height: 30px;
-  background: linear-gradient(to bottom, rgba(248, 249, 250, 0), var(--bg-card));
+  background: linear-gradient(to bottom, rgba(248, 249, 250, 0), var(--saved-card-bg));
   pointer-events: none;
 }
 
-.card-ai-context .card-preview-content::after {
-  background: linear-gradient(to bottom, rgba(224, 231, 255, 0), var(--ai-context-bg));
+.card-unsaved .card-preview-content::after {
+  background: linear-gradient(to bottom, rgba(241, 245, 249, 0), var(--unsaved-card-bg));
 }
+
 
 .card-expanded .card-content-expanded {
   max-height: none;
   overflow: visible;
 }
 
+/* AI Context styling - purple border only */
 .card-ai-context {
+  border-color: var(--ai-context-border);
+  border-width: 3px;
+}
+
+.card-ai-context.card-saved {
+  background-color: var(--saved-card-bg);
+  border-color: var(--ai-context-border);
+  border-width: 3px;
+}
+
+.card-ai-context.card-unsaved {
+  background-color: var(--unsaved-card-bg);
+  border-color: var(--ai-context-border);
+  border-width: 3px;
+}
+
+/* File and unsaved cards cannot be in AI context */
+.ai-context-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--border-radius);
+  border: var(--border-width-thin) solid var(--border-medium);
+  background: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 12px;
+}
+
+.ai-context-button:hover {
+  background-color: var(--hover-bg);
+}
+
+.ai-context-button.active {
   background-color: var(--ai-context-bg);
   border-color: var(--ai-context-border);
+  color: #e0e7ff;
+}
+
+.ai-context-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  background-color: transparent;
+}
+
+.ai-context-button:disabled:hover {
+  background-color: transparent;
 }
 
 .read-more-indicator {
@@ -373,6 +660,15 @@ body {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+@keyframes subtle-pulse {
+  0%, 100% { 
+    box-shadow: 0 0 0 1px rgba(100, 116, 139, 0.2);
+  }
+  50% { 
+    box-shadow: 0 0 0 2px rgba(100, 116, 139, 0.3);
+  }
 }
 
 /* Login page */

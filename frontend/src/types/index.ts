@@ -25,7 +25,8 @@ export interface Brain {
 export interface Card {
   id: string;
   brainId: string;
-  title: string;
+  title: string | null;
+  displayTitle: string; // Title or "Click to add title..." for unsaved cards
   contentPreview: string; // First 500 characters for quick display
   fileSize: number;
   hasFile: boolean;
@@ -34,6 +35,19 @@ export interface Card {
   createdAt: string;
   updatedAt: string;
   content?: string; // Full content (only included when specifically requested)
+  // Card Type System fields (optional for backward compatibility)
+  cardType?: 'saved' | 'file' | 'unsaved';
+  isBrainWide?: boolean;
+  streamSpecificId?: string;
+  fileId?: string;
+  hasTitle?: boolean;
+  isSavedToBrain?: boolean;
+  canBeInAIContext?: boolean;
+  typeInfo?: {
+    icon: string;
+    label: string;
+    description: string;
+  };
 }
 
 export interface CardVersion {
@@ -68,7 +82,8 @@ export interface StreamCard {
   
   // Card data (merged in when fetching stream cards)
   brainId: string;
-  title: string;
+  title: string | null;
+  displayTitle: string;
   contentPreview: string;
   fileSize: number;
   hasFile: boolean;
@@ -77,6 +92,19 @@ export interface StreamCard {
   createdAt: string;
   updatedAt: string;
   content?: string;
+  // Card Type System fields (optional for backward compatibility)
+  cardType?: 'saved' | 'file' | 'unsaved';
+  isBrainWide?: boolean;
+  streamSpecificId?: string;
+  fileId?: string;
+  hasTitle?: boolean;
+  isSavedToBrain?: boolean;
+  canBeInAIContext?: boolean;
+  typeInfo?: {
+    icon: string;
+    label: string;
+    description: string;
+  };
 }
 
 // Card links
