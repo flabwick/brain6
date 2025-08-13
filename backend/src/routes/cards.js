@@ -10,6 +10,8 @@ const { requireAuth } = require('../middleware/auth');
 const cardProcessor = require('../services/cardProcessor');
 const linkParser = require('../services/linkParser');
 const CardFactory = require('../services/CardFactory');
+const pdfProcessor = require('../utils/fileProcessors/pdfProcessor');
+const epubProcessor = require('../utils/fileProcessors/epubProcessor');
 
 // All card routes require authentication
 router.use(requireAuth);
@@ -1060,6 +1062,615 @@ router.put('/:id/update-with-title', async (req, res) => {
     res.status(500).json({
       error: 'Failed to update card',
       message: error.message || 'An error occurred while updating the card'
+    });
+  }
+});
+
+// ========================================
+// FILE CARDS ENDPOINTS
+// ========================================
+
+/**
+ * POST /api/cards/check-file-duplicates
+ * Check for duplicate files before upload
+ */
+router.post('/check-file-duplicates', async (req, res) => {
+  try {
+    const { brainId, fileName } = req.body;
+    
+    if (!brainId || !validateUUID(brainId)) {
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'A valid brain ID is required'
+      });
+    }
+
+    if (!fileName) {
+      return res.status(400).json({
+        error: 'Missing filename',
+        message: 'Filename is required'
+      });
+    }
+
+    // Validate brain ownership
+    const brainValidation = await validateBrainOwnership(brainId, req.session.userId);
+    if (!brainValidation.valid) {
+      const status = brainValidation.error === 'Brain not found' ? 404 : 403;
+      return res.status(status).json({
+        error: brainValidation.error,
+        message: `Cannot check files: ${brainValidation.error}`
+      });
+    }
+
+    // Check for existing file with same name
+    const { query } = require('../models/database');
+    const result = await query(`
+      SELECT id, file_name, file_type, file_size, uploaded_at, 
+             epub_title, pdf_title, epub_author, pdf_author
+      FROM files 
+      WHERE brain_id = $1 AND file_name = $2
+      ORDER BY uploaded_at DESC
+    `, [brainId, fileName]);
+
+    const duplicates = result.rows.map(row => ({
+      id: row.id,
+      fileName: row.file_name,
+      fileType: row.file_type,
+      fileSize: row.file_size,
+      uploadedAt: row.uploaded_at,
+      title: row.file_type === 'epub' ? row.epub_title : row.pdf_title,
+      author: row.file_type === 'epub' ? row.epub_author : row.pdf_author
+    }));
+
+    res.json({
+      hasDuplicates: duplicates.length > 0,
+      duplicates,
+      fileName
+    });
+
+  } catch (error) {
+    console.error('❌ Check file duplicates error:', error);
+    res.status(500).json({
+      error: 'Failed to check file duplicates',
+      message: 'An error occurred while checking for duplicate files'
+    });
+  }
+});
+
+/**
+ * POST /api/cards/upload-file
+ * Upload PDF/EPUB files and create file cards with stream positioning
+ */
+router.post('/upload-file', upload.single('file'), async (req, res) => {
+  try {
+    const { brainId, streamId, position, action, replaceFileId, newFileName } = req.body;
+    
+    if (!brainId || !validateUUID(brainId)) {
+      // Clean up uploaded file
+      if (req.file) {
+        await fs.remove(req.file.path).catch(() => {});
+      }
+      
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'A valid brain ID is required'
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'No file uploaded',
+        message: 'A PDF or EPUB file must be uploaded'
+      });
+    }
+
+    // Validate file type
+    const fileExt = path.extname(req.file.originalname).toLowerCase();
+    if (!['.pdf', '.epub'].includes(fileExt)) {
+      await fs.remove(req.file.path).catch(() => {});
+      return res.status(400).json({
+        error: 'Unsupported file type',
+        message: 'Only PDF and EPUB files are supported'
+      });
+    }
+
+    // Validate brain ownership
+    const brainValidation = await validateBrainOwnership(brainId, req.session.userId);
+    if (!brainValidation.valid) {
+      await fs.remove(req.file.path).catch(() => {});
+      const status = brainValidation.error === 'Brain not found' ? 404 : 403;
+      return res.status(status).json({
+        error: brainValidation.error,
+        message: `Cannot upload file: ${brainValidation.error}`
+      });
+    }
+
+    const brain = brainValidation.brain;
+    
+    // Process file based on type
+    let processResult;
+    const tempFilePath = req.file.path;
+    
+    try {
+      console.log(`Processing ${fileExt} file: ${req.file.originalname}`);
+      if (fileExt === '.pdf') {
+        processResult = await pdfProcessor.processPdfFile(tempFilePath, {
+          title: path.basename(req.file.originalname, '.pdf')
+        });
+      } else if (fileExt === '.epub') {
+        // Create output directory for cover images
+        const brainFolderPath = brain.folderPath || 
+                               path.join(process.cwd(), 'backend', 'storage', brain.userId || req.session.userId, 'brains', brain.name);
+        const coverOutputDir = path.join(brainFolderPath, 'covers');
+        
+        processResult = await epubProcessor.processEpubFile(tempFilePath, {
+          title: path.basename(req.file.originalname, '.epub'),
+          outputDir: coverOutputDir
+        });
+      }
+      console.log(`Successfully processed file, got result:`, {
+        title: processResult.title,
+        hasFileInfo: !!processResult.fileInfo,
+        hasMetadata: !!processResult.metadata
+      });
+      
+      // Move file to brain storage
+      const brainFolderPath = brain.folderPath || 
+                             path.join(process.cwd(), 'backend', 'storage', brain.userId || req.session.userId, 'brains', brain.name);
+      console.log(`Brain folder path: ${brainFolderPath}`);
+      const brainStoragePath = path.join(brainFolderPath, 'files');
+      console.log(`Creating storage directory: ${brainStoragePath}`);
+      await fs.ensureDir(brainStoragePath);
+      
+      // Handle duplicate handling based on user choice
+      let finalFileName = newFileName || req.file.originalname;
+      let finalFilePath = path.join(brainStoragePath, finalFileName);
+      let actualFinalPath = finalFilePath;
+      
+      if (action === 'replace' && replaceFileId) {
+        // Replace existing file - remove old file from database and filesystem
+        const { query } = require('../models/database');
+        const oldFileResult = await query('SELECT file_path FROM files WHERE id = $1 AND brain_id = $2', 
+                                          [replaceFileId, brainId]);
+        if (oldFileResult.rows.length > 0) {
+          const oldFilePath = oldFileResult.rows[0].file_path;
+          await fs.remove(oldFilePath).catch(() => {}); // Remove old file
+          await query('DELETE FROM files WHERE id = $1', [replaceFileId]); // Remove from database
+        }
+        // Use the same filename as being replaced
+        actualFinalPath = finalFilePath;
+      } else if (action === 'rename') {
+        // Use new filename provided by user
+        actualFinalPath = finalFilePath;
+      } else {
+        // Default behavior - add number suffix if file exists
+        let counter = 1;
+        while (await fs.pathExists(actualFinalPath)) {
+          const nameWithoutExt = path.basename(finalFileName, fileExt);
+          actualFinalPath = path.join(brainStoragePath, `${nameWithoutExt}_${counter}${fileExt}`);
+          finalFileName = `${nameWithoutExt}_${counter}${fileExt}`;
+          counter++;
+        }
+      }
+      
+      await fs.move(tempFilePath, actualFinalPath);
+      
+      // Create file record in database (assuming we run the migration)
+      const db = require('../models/database');
+      let fileInsertQuery, fileInsertParams;
+      
+      if (fileExt === '.pdf') {
+        fileInsertQuery = `
+          INSERT INTO files (
+            brain_id, file_name, file_type, file_size, file_path, 
+            pdf_page_count, pdf_author, pdf_title,
+            content_preview, processing_status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          RETURNING *
+        `;
+        fileInsertParams = [
+          brainId,
+          path.basename(actualFinalPath),
+          'pdf',
+          processResult.fileInfo.size,
+          actualFinalPath,
+          processResult.fileInfo.pageCount || null,
+          processResult.fileInfo.author || null,
+          processResult.fileInfo.title || null,
+          processResult.metadata.contentPreview || processResult.title,
+          'complete'
+        ];
+      } else if (fileExt === '.epub') {
+        fileInsertQuery = `
+          INSERT INTO files (
+            brain_id, file_name, file_type, file_size, file_path, 
+            epub_title, epub_author, epub_description, epub_chapter_count,
+            content_preview, processing_status, cover_image_path
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          RETURNING *
+        `;
+        fileInsertParams = [
+          brainId,
+          path.basename(actualFinalPath),
+          'epub',
+          processResult.fileInfo.size,
+          actualFinalPath,
+          processResult.fileInfo.title || null,
+          processResult.fileInfo.author || null,
+          processResult.metadata.contentPreview || null,
+          processResult.fileInfo.chapterCount || null,
+          processResult.metadata.contentPreview || processResult.title,
+          'complete',
+          processResult.epubInfo?.coverImagePath || null
+        ];
+      }
+      
+      console.log('Inserting file record:', { 
+        brainId, 
+        fileName: path.basename(actualFinalPath),
+        fileType: fileExt.substring(1)
+      });
+      
+      const fileRecord = await db.query(fileInsertQuery, fileInsertParams);
+      
+      // Files are NOT cards - add file directly to stream if specified
+      if (streamId && validateUUID(streamId) && position !== undefined) {
+        const StreamFile = require('../models/StreamFile');
+        await StreamFile.addFileToStream(streamId, fileRecord.rows[0].id, parseInt(position) + 1);
+      }
+      
+      res.status(201).json({
+        success: true,
+        data: {
+          fileId: fileRecord.rows[0].id,
+          fileName: path.basename(actualFinalPath),
+          fileType: fileExt.substring(1),
+          fileSize: processResult.fileInfo.size,
+          file: {
+            id: fileRecord.rows[0].id,
+            fileName: path.basename(actualFinalPath),
+            fileType: fileExt.substring(1),
+            fileSize: processResult.fileInfo.size,
+            filePath: actualFinalPath,
+            title: processResult.fileInfo.title || processResult.title,
+            author: processResult.fileInfo.author,
+            description: processResult.metadata.contentPreview,
+            processingStatus: 'complete'
+          }
+        },
+        message: `${fileExt.toUpperCase()} file uploaded and processed successfully`
+      });
+      
+    } catch (processError) {
+      // Clean up file on processing error
+      await fs.remove(tempFilePath).catch(() => {});
+      console.error('File processing error:', processError);
+      
+      return res.status(500).json({
+        error: 'File processing failed',
+        message: processError.message
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Upload file error:', error);
+    
+    // Clean up uploaded file on error
+    if (req.file) {
+      await fs.remove(req.file.path).catch(() => {});
+    }
+    
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        error: 'File too large',
+        message: 'File size exceeds the 100MB limit'
+      });
+    }
+    
+    res.status(500).json({
+      error: 'Failed to upload file',
+      message: 'An error occurred while uploading the file'
+    });
+  }
+});
+
+/**
+ * GET /api/cards/:id/file-info
+ * Get file information for a file card
+ */
+router.get('/:id/file-info', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid card ID',
+        message: 'Card ID must be a valid UUID'
+      });
+    }
+
+    const validation = await validateCardOwnership(id, req.session.userId);
+    if (!validation.valid) {
+      const status = validation.error === 'Card not found' ? 404 : 403;
+      return res.status(status).json({
+        error: validation.error,
+        message: `Cannot access file info: ${validation.error}`
+      });
+    }
+
+    const card = validation.card;
+    
+    if (!card.file_id) {
+      return res.status(404).json({
+        error: 'Not a file card',
+        message: 'This card is not associated with a file'
+      });
+    }
+
+    // Get file information from database
+    const db = require('../models/database');
+    const result = await db.query(`
+      SELECT f.*, 
+        CASE 
+          WHEN f.file_type = 'pdf' THEN f.pdf_title
+          WHEN f.file_type = 'epub' THEN f.epub_title
+          ELSE f.file_name
+        END as display_title
+      FROM files f 
+      WHERE f.id = $1
+    `, [card.file_id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'File not found',
+        message: 'Associated file record not found'
+      });
+    }
+
+    const fileRecord = result.rows[0];
+    
+    // Format file info for frontend
+    const fileInfo = {
+      id: fileRecord.id,
+      fileName: fileRecord.file_name,
+      filePath: fileRecord.file_path,
+      fileSize: fileRecord.file_size,
+      fileType: fileRecord.file_type,
+      title: fileRecord.display_title,
+      contentPreview: fileRecord.content_preview,
+      processingStatus: fileRecord.processing_status,
+      uploadedAt: fileRecord.uploaded_at
+    };
+
+    // Add type-specific metadata
+    if (fileRecord.file_type === 'pdf') {
+      fileInfo.pageCount = fileRecord.pdf_page_count;
+      fileInfo.author = fileRecord.pdf_author;
+      fileInfo.subject = fileRecord.pdf_subject;
+    } else if (fileRecord.file_type === 'epub') {
+      fileInfo.author = fileRecord.epub_author;
+      fileInfo.publisher = fileRecord.epub_publisher;
+      fileInfo.language = fileRecord.epub_language;
+      fileInfo.isbn = fileRecord.epub_isbn;
+      fileInfo.publicationDate = fileRecord.epub_publication_date;
+      fileInfo.description = fileRecord.epub_description;
+      fileInfo.chapterCount = fileRecord.epub_chapter_count;
+      fileInfo.hasImages = fileRecord.epub_has_images;
+      fileInfo.hasToc = fileRecord.epub_has_toc;
+      fileInfo.coverImagePath = fileRecord.cover_image_path;
+    }
+
+    res.json({
+      fileInfo
+    });
+
+  } catch (error) {
+    console.error('❌ Get file info error:', error);
+    res.status(500).json({
+      error: 'Failed to get file information',
+      message: 'An error occurred while retrieving file information'
+    });
+  }
+});
+
+/**
+ * GET /api/files/:id/content
+ * Serve file content for viewing (PDF/EPUB)
+ */
+router.get('/files/:id/content', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid file ID',
+        message: 'File ID must be a valid UUID'
+      });
+    }
+
+    // Get file record and verify ownership through brain
+    const db = require('../models/database');
+    const result = await db.query(`
+      SELECT f.*, b.user_id 
+      FROM files f
+      JOIN brains b ON f.brain_id = b.id
+      WHERE f.id = $1
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'File not found',
+        message: 'File record not found'
+      });
+    }
+
+    const fileRecord = result.rows[0];
+    
+    if (fileRecord.user_id !== req.session.userId) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'You do not have permission to access this file'
+      });
+    }
+
+    if (!await fs.pathExists(fileRecord.file_path)) {
+      return res.status(404).json({
+        error: 'File not found',
+        message: 'Physical file not found on disk'
+      });
+    }
+
+    // Set appropriate content type and headers
+    const mimeTypes = {
+      pdf: 'application/pdf',
+      epub: 'application/epub+zip'
+    };
+
+    res.setHeader('Content-Type', mimeTypes[fileRecord.file_type] || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${fileRecord.file_name}"`);
+    
+    // Stream file content
+    const fileStream = fs.createReadStream(fileRecord.file_path);
+    fileStream.pipe(res);
+
+  } catch (error) {
+    console.error('❌ Serve file content error:', error);
+    res.status(500).json({
+      error: 'Failed to serve file content',
+      message: 'An error occurred while serving the file'
+    });
+  }
+});
+
+/**
+ * GET /api/files/:id/download
+ * Download file with proper filename and headers
+ */
+router.get('/files/:id/download', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid file ID',
+        message: 'File ID must be a valid UUID'
+      });
+    }
+
+    // Get file record and verify ownership
+    const db = require('../models/database');
+    const result = await db.query(`
+      SELECT f.*, b.user_id 
+      FROM files f
+      JOIN brains b ON f.brain_id = b.id
+      WHERE f.id = $1
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'File not found'
+      });
+    }
+
+    const fileRecord = result.rows[0];
+    
+    if (fileRecord.user_id !== req.session.userId) {
+      return res.status(403).json({
+        error: 'Access denied'
+      });
+    }
+
+    if (!await fs.pathExists(fileRecord.file_path)) {
+      return res.status(404).json({
+        error: 'File not found on disk'
+      });
+    }
+
+    // Set download headers
+    const mimeTypes = {
+      pdf: 'application/pdf',
+      epub: 'application/epub+zip'
+    };
+
+    res.setHeader('Content-Type', mimeTypes[fileRecord.file_type] || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileRecord.file_name}"`);
+    
+    // Stream file for download
+    const fileStream = fs.createReadStream(fileRecord.file_path);
+    fileStream.pipe(res);
+
+  } catch (error) {
+    console.error('❌ Download file error:', error);
+    res.status(500).json({
+      error: 'Failed to download file'
+    });
+  }
+});
+
+/**
+ * GET /api/files/:id/cover
+ * Serve EPUB cover image
+ */
+router.get('/files/:id/cover', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid file ID'
+      });
+    }
+
+    // Get file record and verify ownership
+    const db = require('../models/database');
+    const result = await db.query(`
+      SELECT f.cover_image_path, b.user_id 
+      FROM files f
+      JOIN brains b ON f.brain_id = b.id
+      WHERE f.id = $1 AND f.file_type = 'epub'
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'EPUB file not found'
+      });
+    }
+
+    const fileRecord = result.rows[0];
+    
+    if (fileRecord.user_id !== req.session.userId) {
+      return res.status(403).json({
+        error: 'Access denied'
+      });
+    }
+
+    if (!fileRecord.cover_image_path || !await fs.pathExists(fileRecord.cover_image_path)) {
+      return res.status(404).json({
+        error: 'Cover image not found'
+      });
+    }
+
+    // Determine image type from file extension
+    const ext = path.extname(fileRecord.cover_image_path).toLowerCase();
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp'
+    };
+
+    res.setHeader('Content-Type', mimeTypes[ext] || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+    
+    // Stream cover image
+    const imageStream = fs.createReadStream(fileRecord.cover_image_path);
+    imageStream.pipe(res);
+
+  } catch (error) {
+    console.error('❌ Serve cover image error:', error);
+    res.status(500).json({
+      error: 'Failed to serve cover image'
     });
   }
 });

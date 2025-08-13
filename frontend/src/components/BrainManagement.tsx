@@ -21,6 +21,7 @@ const BrainManagement: React.FC<BrainManagementProps> = ({
   const [activeSection, setActiveSection] = useState<Section>('streams');
   const [streams, setStreams] = useState<Stream[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
+  const [files, setFiles] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRenamingBrain, setIsRenamingBrain] = useState(false);
   const [brainTitle, setBrainTitle] = useState(brain.title);
@@ -52,6 +53,18 @@ const BrainManagement: React.FC<BrainManagementProps> = ({
     }
   };
 
+  const loadFiles = async () => {
+    try {
+      setIsLoading(true);
+      const response = await api.get(`/brains/${brain.id}/files`);
+      setFiles(response.data.files || []);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to load files');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
     setBrainTitle((brain as any).name || brain.title);
   }, [brain.title, (brain as any).name]);
@@ -61,6 +74,8 @@ const BrainManagement: React.FC<BrainManagementProps> = ({
       loadStreams();
     } else if (activeSection === 'cards') {
       loadCards();
+    } else if (activeSection === 'files') {
+      loadFiles();
     }
   }, [activeSection, brain.id]);
 
@@ -193,6 +208,36 @@ const BrainManagement: React.FC<BrainManagementProps> = ({
     }
   };
 
+  const handleOpenFileInStream = async (file: any) => {
+    try {
+      const fileName = file.pdf_title || file.epub_title || file.file_name || 'Untitled';
+      const response = await api.post('/streams/open-file', {
+        fileId: file.id,
+        brainId: brain.id,
+        streamTitle: `${fileName}`
+      });
+      
+      if (response.data.success && response.data.stream) {
+        // Navigate to the newly created stream
+        onStreamSelect(response.data.stream);
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to open file in stream');
+    }
+  };
+
+  const handleDeleteFile = async (file: any) => {
+    const fileName = file.pdf_title || file.epub_title || file.file_name || 'Untitled';
+    if (window.confirm(`Are you sure you want to delete "${fileName}"? This will remove the file from all streams and delete it permanently.`)) {
+      try {
+        await api.delete(`/brains/${brain.id}/files/${file.id}`);
+        setFiles(files.filter(f => f.id !== file.id));
+      } catch (err: any) {
+        setError(err.response?.data?.message || 'Failed to delete file');
+      }
+    }
+  };
+
   const filteredStreams = streams.filter(stream => {
     const streamName = (stream as any).name || stream.title || '';
     return streamName.toLowerCase().includes(searchTerm.toLowerCase());
@@ -226,6 +271,34 @@ const BrainManagement: React.FC<BrainManagementProps> = ({
       case 'size':
         const aSize = parseInt((a as any).file_size || a.fileSize || '0');
         const bSize = parseInt((b as any).file_size || b.fileSize || '0');
+        return bSize - aSize;
+      default:
+        return 0;
+    }
+  });
+
+  const filteredFiles = files.filter(file => {
+    const fileName = file.file_name || file.fileName || '';
+    const fileType = file.file_type || file.fileType || '';
+    const fileTitle = file.pdf_title || file.epub_title || '';
+    const fileAuthor = file.pdf_author || file.epub_author || '';
+    return fileName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+           fileType.toLowerCase().includes(searchTerm.toLowerCase()) ||
+           fileTitle.toLowerCase().includes(searchTerm.toLowerCase()) ||
+           fileAuthor.toLowerCase().includes(searchTerm.toLowerCase());
+  }).sort((a, b) => {
+    switch (sortBy) {
+      case 'name':
+        const aName = a.file_name || a.fileName || '';
+        const bName = b.file_name || b.fileName || '';
+        return aName.localeCompare(bName);
+      case 'date':
+        const aDate = a.uploaded_at || a.uploadedAt || a.created_at;
+        const bDate = b.uploaded_at || b.uploadedAt || b.created_at;
+        return new Date(bDate).getTime() - new Date(aDate).getTime();
+      case 'size':
+        const aSize = parseInt(a.file_size || a.fileSize || '0');
+        const bSize = parseInt(b.file_size || b.fileSize || '0');
         return bSize - aSize;
       default:
         return 0;
@@ -298,7 +371,7 @@ const BrainManagement: React.FC<BrainManagementProps> = ({
           className={`nav-tab ${activeSection === 'files' ? 'active' : ''}`}
           onClick={() => setActiveSection('files')}
         >
-          Files (Coming Soon)
+          Files ({files.length})
         </button>
       </div>
 
@@ -441,11 +514,107 @@ const BrainManagement: React.FC<BrainManagementProps> = ({
 
         {activeSection === 'files' && (
           <div className="files-section">
-            <div className="empty-state">
-              <h3>Files Management</h3>
-              <p>File management features are coming soon!</p>
-              <p>You'll be able to upload, organize, and manage files here.</p>
+            <div className="content-controls">
+              <input
+                type="text"
+                placeholder="Search files..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="search-input"
+              />
+              <div className="sort-controls">
+                <label>Sort by:</label>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as 'name' | 'date' | 'size')}
+                  className="sort-select"
+                >
+                  <option value="date">Date</option>
+                  <option value="name">Name</option>
+                  <option value="size">Size</option>
+                </select>
+              </div>
             </div>
+
+            {isLoading ? (
+              <div className="loading-message">
+                <span className="loading-spinner" />
+                Loading files...
+              </div>
+            ) : filteredFiles.length > 0 ? (
+              <div className="items-grid">
+                {filteredFiles.map((file) => (
+                  <div key={file.id} className="item-card file-item">
+                    <div className="item-header">
+                      <div className="file-icon">
+                        {file.file_type === 'pdf' ? '📄' : file.file_type === 'epub' ? '📚' : '📁'}
+                      </div>
+                      <h4 className="item-title">
+                        {file.pdf_title || file.epub_title || file.file_name}
+                      </h4>
+                      <div className="item-actions">
+                        <button
+                          className="action-btn open-btn"
+                          onClick={() => handleOpenFileInStream(file)}
+                          title="Open in new stream"
+                        >
+                          ➡️
+                        </button>
+                        <button
+                          className="action-btn download-btn"
+                          onClick={() => window.open(`/api/files/${file.id}/download`, '_blank')}
+                          title="Download file"
+                        >
+                          📥
+                        </button>
+                        <button
+                          className="action-btn delete-btn"
+                          onClick={() => handleDeleteFile(file)}
+                          title="Delete file permanently"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                    <div className="file-metadata">
+                      <p>
+                        <strong>Type:</strong> {file.file_type?.toUpperCase()}
+                        {file.pdf_page_count && ` • ${file.pdf_page_count} pages`}
+                        {file.epub_chapter_count && ` • ${file.epub_chapter_count} chapters`}
+                      </p>
+                      <p>
+                        <strong>Size:</strong> {formatBytes(file.file_size)}
+                        <span className="file-date">
+                          • Uploaded {formatDate(file.uploaded_at || file.created_at)}
+                        </span>
+                      </p>
+                      {(file.pdf_author || file.epub_author) && (
+                        <p><strong>Author:</strong> {file.pdf_author || file.epub_author}</p>
+                      )}
+                      {file.epub_publisher && (
+                        <p><strong>Publisher:</strong> {file.epub_publisher}</p>
+                      )}
+                    </div>
+                    {file.content_preview && (
+                      <div className="file-preview">
+                        <p>{file.content_preview.substring(0, 200)}...</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <h3>No Files Found</h3>
+                <p>
+                  {searchTerm 
+                    ? `No files match "${searchTerm}".` 
+                    : 'No files have been uploaded to this brain yet.'
+                  }
+                </p>
+                <p>Upload PDF and EPUB files through streams to see them here.</p>
+              </div>
+            )}
           </div>
         )}
       </div>

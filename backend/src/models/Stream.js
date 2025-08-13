@@ -291,10 +291,19 @@ class Stream {
    */
   async delete() {
     await transaction(async (client) => {
-      // Delete stream (cascades to stream_cards due to foreign key)
+      // First, delete any stream-specific (unsaved) cards that belong only to this stream
+      await client.query('DELETE FROM cards WHERE stream_specific_id = $1', [this.id]);
+      
+      // Delete stream_cards relationships
+      await client.query('DELETE FROM stream_cards WHERE stream_id = $1', [this.id]);
+      
+      // Delete stream_files relationships
+      await client.query('DELETE FROM stream_files WHERE stream_id = $1', [this.id]);
+      
+      // Finally, delete the stream itself
       await client.query('DELETE FROM streams WHERE id = $1', [this.id]);
       
-      console.log(`✅ Deleted stream: ${this.name}`);
+      console.log(`✅ Deleted stream: ${this.name} and all associated data`);
     });
   }
 

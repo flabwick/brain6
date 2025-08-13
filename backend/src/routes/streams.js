@@ -406,12 +406,19 @@ router.get('/:id/cards', async (req, res) => {
     // Verify ownership
     await validateStreamOwnership(id, req.session.userId);
     
-    // Get cards
-    const cards = await StreamCard.getStreamCards(id);
+    // Get mixed stream items (both cards and files)
+    const StreamFile = require('../models/StreamFile');
+    const items = await StreamFile.getStreamItems(id);
     const aiContextCards = await StreamCard.getAIContextCards(id);
     
+    // Separate cards and files for backwards compatibility
+    const cards = items.filter(item => item.itemType === 'card');
+    const files = items.filter(item => item.itemType === 'file');
+    
     res.json({
-      cards,
+      items, // Mixed array of cards and files in position order
+      cards, // Just cards (for backwards compatibility)
+      files, // Just files
       aiContextCards,
       count: cards.length,
       aiContextCount: aiContextCards.length,
@@ -753,6 +760,240 @@ router.get('/:id/stats', async (req, res) => {
     res.status(500).json({
       error: 'Failed to get stream statistics',
       message: 'An error occurred while fetching stream statistics'
+    });
+  }
+});
+
+/**
+ * DELETE /api/streams/:id/files/:fileId
+ * Remove file from stream
+ */
+router.delete('/:id/files/:fileId', async (req, res) => {
+  try {
+    const { id, fileId } = req.params;
+    
+    if (!validateUUID(id) || !validateUUID(fileId)) {
+      return res.status(400).json({
+        error: 'Invalid ID',
+        message: 'Stream ID and file ID must be valid UUIDs'  
+      });
+    }
+    
+    // Verify ownership
+    await validateStreamOwnership(id, req.session.userId);
+    
+    // Remove file from stream
+    const StreamFile = require('../models/StreamFile');
+    const result = await StreamFile.removeFileFromStream(id, fileId);
+    
+    if (!result.removed) {
+      return res.status(404).json({
+        error: 'File not found in stream',
+        message: 'The file is not in this stream'
+      });
+    }
+    
+    res.json({
+      ...result,
+      message: 'File removed from stream successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Remove file from stream error:', error);
+    if (error.message.includes('not found') || error.message.includes('Access denied')) {
+      return res.status(error.message.includes('Access denied') ? 403 : 404).json({
+        error: error.message.includes('Access denied') ? 'Access denied' : 'Not found',
+        message: error.message
+      });
+    }
+    res.status(500).json({
+      error: 'Failed to remove file from stream',
+      message: 'An error occurred while removing the file'
+    });
+  }
+});
+
+/**
+ * POST /api/streams/:id/files
+ * Add existing file to stream
+ */
+router.post('/:id/files', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { fileId, position, depth = 0, isCollapsed = false } = req.body;
+    
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid stream ID',
+        message: 'Stream ID must be a valid UUID'
+      });
+    }
+    
+    if (!fileId || !validateUUID(fileId)) {
+      return res.status(400).json({
+        error: 'Invalid file ID',
+        message: 'Valid file ID is required'
+      });
+    }
+    
+    // Verify ownership
+    await validateStreamOwnership(id, req.session.userId);
+    
+    // Add file to stream
+    const StreamFile = require('../models/StreamFile');
+    const result = await StreamFile.addFileToStream(id, fileId, position, depth, {
+      isCollapsed
+    });
+    
+    res.status(201).json({
+      streamFile: result,
+      message: 'File added to stream successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Add file to stream error:', error);
+    
+    if (error.message.includes('already exists')) {
+      return res.status(409).json({
+        error: 'File already in stream',
+        message: error.message
+      });
+    }
+    
+    if (error.message.includes('not found') || error.message.includes('Access denied')) {
+      return res.status(error.message.includes('Access denied') ? 403 : 404).json({
+        error: error.message.includes('Access denied') ? 'Access denied' : 'Not found',
+        message: error.message
+      });
+    }
+    
+    res.status(500).json({
+      error: 'Failed to add file to stream',
+      message: 'An error occurred while adding the file'
+    });
+  }
+});
+
+/**
+ * PUT /api/streams/:id/files/:fileId
+ * Update file position in stream
+ */
+router.put('/:id/files/:fileId', async (req, res) => {
+  try {
+    const { id, fileId } = req.params;
+    const { position } = req.body;
+    
+    if (!validateUUID(id) || !validateUUID(fileId)) {
+      return res.status(400).json({
+        error: 'Invalid ID',
+        message: 'Stream ID and file ID must be valid UUIDs'
+      });
+    }
+    
+    if (position === undefined || !Number.isInteger(position) || position < 0) {
+      return res.status(400).json({
+        error: 'Invalid position',
+        message: 'Position must be a non-negative integer'
+      });
+    }
+    
+    // Verify ownership
+    await validateStreamOwnership(id, req.session.userId);
+    
+    // Update file position
+    const StreamFile = require('../models/StreamFile');
+    const result = await StreamFile.updateFilePosition(id, fileId, position);
+    
+    res.json({
+      ...result,
+      message: 'File position updated successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Update file position error:', error);
+    if (error.message.includes('not found') || error.message.includes('Access denied')) {
+      return res.status(error.message.includes('Access denied') ? 403 : 404).json({
+        error: error.message.includes('Access denied') ? 'Access denied' : 'Not found',
+        message: error.message
+      });
+    }
+    res.status(500).json({
+      error: 'Failed to update file position',
+      message: 'An error occurred while updating the file position'
+    });
+  }
+});
+
+/**
+ * POST /api/streams/open-file
+ * Create a new stream with a specific file
+ */
+router.post('/open-file', async (req, res) => {
+  try {
+    const { fileId, brainId, streamTitle } = req.body;
+    
+    if (!validateUUID(fileId) || !validateUUID(brainId)) {
+      return res.status(400).json({
+        error: 'Invalid ID',
+        message: 'File ID and brain ID must be valid UUIDs'
+      });
+    }
+    
+    // Verify file exists and user has access
+    const { query } = require('../models/database');
+    const fileResult = await query(`
+      SELECT f.id, f.file_name, f.brain_id, b.user_id
+      FROM files f
+      JOIN brains b ON f.brain_id = b.id
+      WHERE f.id = $1 AND f.brain_id = $2
+    `, [fileId, brainId]);
+
+    if (fileResult.rows.length === 0) {
+      return res.status(404).json({
+        error: 'File not found',
+        message: 'The requested file does not exist'
+      });
+    }
+
+    const file = fileResult.rows[0];
+    if (file.user_id !== req.session.userId) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'You do not have permission to access this file'
+      });
+    }
+
+    // Create new stream
+    const Stream = require('../models/Stream');
+    const title = streamTitle || `${file.file_name}`;
+    const stream = await Stream.create({
+      brainId,
+      title,
+      userId: req.session.userId
+    });
+
+    // Add file to stream
+    const StreamFile = require('../models/StreamFile');
+    await StreamFile.addFileToStream(stream.id, fileId, 0); // Position 0 (first item)
+
+    res.status(201).json({
+      success: true,
+      stream: {
+        id: stream.id,
+        title: stream.title,
+        brainId: stream.brainId,
+        createdAt: stream.createdAt
+      },
+      fileId,
+      fileName: file.file_name,
+      message: `Created new stream "${title}" with file`
+    });
+
+  } catch (error) {
+    console.error('❌ Open file in stream error:', error);
+    res.status(500).json({
+      error: 'Failed to open file in stream',
+      message: 'An error occurred while creating the stream'
     });
   }
 });

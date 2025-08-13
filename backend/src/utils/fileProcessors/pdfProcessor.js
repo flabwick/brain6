@@ -1,41 +1,77 @@
 const fs = require('fs-extra');
 const path = require('path');
+const pdfParse = require('pdf-parse');
 
 /**
- * PDF File Processor (Placeholder Implementation)
- * Currently returns metadata only - text extraction to be implemented later
+ * Enhanced PDF File Processor
+ * Extracts metadata, text content, and page information from PDF files
  */
 
 /**
- * Extract basic metadata from PDF file
+ * Extract comprehensive metadata from PDF file
  * @param {string} filePath - Path to PDF file
- * @returns {Promise<Object>} - Basic PDF metadata
+ * @returns {Promise<Object>} - Complete PDF metadata
  */
 async function extractPdfMetadata(filePath) {
   const stats = await fs.stat(filePath);
   const fileName = path.basename(filePath, path.extname(filePath));
   
-  // Basic metadata that we can determine without PDF parsing
-  const metadata = {
-    fileName,
-    fileSize: stats.size,
-    fileType: 'pdf',
-    modified: stats.mtime,
-    created: stats.birthtime || stats.ctime,
-    // Placeholder values - would be extracted from PDF in full implementation
-    pageCount: null,
-    title: null,
-    author: null,
-    subject: null,
-    creator: null,
-    producer: null,
-    creationDate: null,
-    modificationDate: null,
-    encrypted: false,
-    version: null
-  };
+  try {
+    // Read and parse PDF file
+    const dataBuffer = await fs.readFile(filePath);
+    const pdfData = await pdfParse(dataBuffer);
+    
+    // Extract metadata from PDF
+    const metadata = {
+      fileName,
+      fileSize: stats.size,
+      fileType: 'pdf',
+      modified: stats.mtime,
+      created: stats.birthtime || stats.ctime,
+      // PDF-specific metadata
+      pageCount: pdfData.numpages || 0,
+      title: pdfData.info?.Title || null,
+      author: pdfData.info?.Author || null,
+      subject: pdfData.info?.Subject || null,
+      creator: pdfData.info?.Creator || null,
+      producer: pdfData.info?.Producer || null,
+      creationDate: pdfData.info?.CreationDate ? new Date(pdfData.info.CreationDate) : null,
+      modificationDate: pdfData.info?.ModDate ? new Date(pdfData.info.ModDate) : null,
+      encrypted: pdfData.info?.IsAcroFormPresent || false,
+      version: pdfData.version || null,
+      // Content statistics
+      textLength: pdfData.text?.length || 0,
+      wordCount: pdfData.text ? pdfData.text.split(/\s+/).filter(word => word.length > 0).length : 0
+    };
 
-  return metadata;
+    return { metadata, fullText: pdfData.text || '' };
+  } catch (error) {
+    console.error(`Error parsing PDF ${filePath}:`, error.message);
+    
+    // Fallback to basic file metadata if PDF parsing fails
+    const metadata = {
+      fileName,
+      fileSize: stats.size,
+      fileType: 'pdf',
+      modified: stats.mtime,
+      created: stats.birthtime || stats.ctime,
+      pageCount: null,
+      title: null,
+      author: null,
+      subject: null,
+      creator: null,
+      producer: null,
+      creationDate: null,
+      modificationDate: null,
+      encrypted: false,
+      version: null,
+      textLength: 0,
+      wordCount: 0,
+      parseError: error.message
+    };
+
+    return { metadata, fullText: '' };
+  }
 }
 
 /**
@@ -63,10 +99,11 @@ function generateTitle(fileName, metadata) {
 }
 
 /**
- * Process a PDF file (placeholder implementation)
+ * Process a PDF file with full text extraction
  * @param {string} filePath - Path to the PDF file
  * @param {Object} options - Processing options
  * @param {string} options.title - Custom title (optional)
+ * @param {boolean} options.extractFullText - Whether to extract full text (default: false for file cards)
  * @returns {Promise<Object>} - Processed PDF data
  */
 async function processPdfFile(filePath, options = {}) {
@@ -75,54 +112,69 @@ async function processPdfFile(filePath, options = {}) {
       throw new Error(`File not found: ${filePath}`);
     }
 
-    // Extract basic metadata
-    const metadata = await extractPdfMetadata(filePath);
+    // Extract metadata and optionally full text
+    const { metadata, fullText } = await extractPdfMetadata(filePath);
     
     // Generate title
     const title = options.title || generateTitle(path.basename(filePath), metadata);
     
-    // Create placeholder content indicating this is a PDF reference
-    const content = `# ${title}
+    // Create content for file card display
+    let content;
+    if (options.extractFullText && fullText.trim()) {
+      // Full text extraction mode
+      content = `# ${title}
+
+${fullText}`;
+    } else {
+      // File card mode - show metadata and preview
+      const preview = fullText.trim() ? 
+        fullText.substring(0, 500).trim() + (fullText.length > 500 ? '...' : '') : 
+        '*No text content could be extracted from this PDF.*';
+        
+      content = `# ${title}
 
 **File Type:** PDF Document  
+**Pages:** ${metadata.pageCount || 'Unknown'}  
 **File Size:** ${(metadata.fileSize / 1024 / 1024).toFixed(2)} MB  
+**Author:** ${metadata.author || 'Unknown'}  
 **Last Modified:** ${metadata.modified.toLocaleDateString()}  
 
-*This is a reference card for a PDF file. Full text extraction is not yet implemented.*
-
-**File Location:** \`${filePath}\`
-
-## Future Features
-- Text extraction from PDF pages
-- Page-by-page content breakdown
-- Image extraction
-- Searchable content indexing
+## Content Preview
+${preview}
 
 ---
-*To view the full PDF content, open the file directly from the file system.*`;
+**File Location:** \`${filePath}\`
+
+*This is a file card. The PDF can be viewed inline when expanded.*`;
+    }
 
     return {
       title,
       content,
       metadata: {
         ...metadata,
-        contentType: 'pdf-reference',
-        wordCount: 0, // No text content extracted yet
+        contentType: 'pdf-file-card',
         characterCount: content.length,
-        isPlaceholder: true
+        isFileCard: true,
+        hasFullText: !!fullText.trim(),
+        contentPreview: fullText.substring(0, 500).trim()
       },
       fileInfo: {
         path: filePath,
         size: metadata.fileSize,
         modified: metadata.modified,
-        created: metadata.created
+        created: metadata.created,
+        pageCount: metadata.pageCount,
+        author: metadata.author,
+        title: metadata.title
       },
       processingInfo: {
-        processor: 'pdf-placeholder',
+        processor: 'pdf-enhanced',
         processedAt: new Date(),
         contentLength: content.length,
-        textExtracted: false,
-        note: 'PDF text extraction not yet implemented'
+        textExtracted: !!fullText.trim(),
+        fullTextLength: fullText.length,
+        note: fullText.trim() ? 'PDF text successfully extracted' : 'PDF parsing completed but no text extracted'
       }
     };
 
@@ -187,7 +239,27 @@ function getSupportedExtensions() {
  * @returns {boolean} - True if text extraction is implemented
  */
 function isTextExtractionAvailable() {
-  return false; // Placeholder implementation
+  return true; // Now fully implemented
+}
+
+/**
+ * Extract text preview from PDF for card display
+ * @param {string} filePath - Path to PDF file
+ * @param {number} maxLength - Maximum preview length (default: 500)
+ * @returns {Promise<string>} - Text preview
+ */
+async function extractTextPreview(filePath, maxLength = 500) {
+  try {
+    const { fullText } = await extractPdfMetadata(filePath);
+    if (!fullText.trim()) {
+      return '*No text content available in this PDF.*';
+    }
+    
+    return fullText.substring(0, maxLength).trim() + (fullText.length > maxLength ? '...' : '');
+  } catch (error) {
+    console.error(`Error extracting PDF preview ${filePath}:`, error.message);
+    return '*Error extracting PDF content.*';
+  }
 }
 
 module.exports = {
@@ -196,5 +268,6 @@ module.exports = {
   getSupportedExtensions,
   extractPdfMetadata,
   generateTitle,
-  isTextExtractionAvailable
+  isTextExtractionAvailable,
+  extractTextPreview
 };

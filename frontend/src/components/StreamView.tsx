@@ -1,9 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import Card from './Card';
+import FileViewer from './FileViewer';
 import CardSearchInterface from './CardSearchInterface';
+import FileUploadInterface from './FileUploadInterface';
+import FileSearchInterface from './FileSearchInterface';
 import { Stream, StreamCard, Card as CardType } from '../types';
 import api from '../services/api';
 import { useApp } from '../contexts/AppContext';
+
+interface StreamItem {
+  itemType: 'card' | 'file';
+  position: number;
+  id: string;
+  [key: string]: any;
+}
 
 interface StreamViewProps {
   streamId: string;
@@ -12,12 +22,14 @@ interface StreamViewProps {
 
 const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
   const [stream, setStream] = useState<Stream | null>(null);
-  const [streamCards, setStreamCards] = useState<StreamCard[]>([]);
+  const [streamItems, setStreamItems] = useState<StreamItem[]>([]); // Mixed cards and files
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeCardIdForAdd, setActiveCardIdForAdd] = useState<string | null>(null);
   const [generatingCardId, setGeneratingCardId] = useState<string | null>(null);
   const [generationController, setGenerationController] = useState<AbortController | null>(null);
+  const [activeCardIdForUpload, setActiveCardIdForUpload] = useState<string | null>(null);
+  const [activeCardIdForFileAdd, setActiveCardIdForFileAdd] = useState<string | null>(null);
   const { setError: setGlobalError, aiContextCards } = useApp();
 
   useEffect(() => {
@@ -33,9 +45,9 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
       const streamResponse = await api.get(`/streams/${streamId}`);
       setStream(streamResponse.data.stream);
 
-      // Load stream cards
-      const cardsResponse = await api.get(`/streams/${streamId}/cards`);
-      setStreamCards(cardsResponse.data.cards || []);
+      // Load stream items (mixed cards and files)
+      const itemsResponse = await api.get(`/streams/${streamId}/cards`);
+      setStreamItems(itemsResponse.data.items || []); // Use items instead of cards
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Failed to load stream';
       setError(errorMessage);
@@ -48,20 +60,22 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
   const handleUpdateCard = async (cardId: string, updates: Partial<CardType>) => {
     try {
       // Store original state for potential revert
-      const originalStreamCards = [...streamCards];
+      const originalStreamItems = [...streamItems];
       
       // Optimistically update the UI immediately
-      const newStreamCards = streamCards.map(streamCard => {
-        const currentCardId = streamCard.cardId || streamCard.id;
-        if (currentCardId === cardId) {
-          return {
-            ...streamCard,
-            ...updates
-          };
+      const newStreamItems = streamItems.map(item => {
+        if (item.itemType === 'card') {
+          const currentCardId = item.cardId || item.id;
+          if (currentCardId === cardId) {
+            return {
+              ...item,
+              ...updates
+            };
+          }
         }
-        return streamCard;
+        return item;
       });
-      setStreamCards(newStreamCards);
+      setStreamItems(newStreamItems);
       
       // Update server in background
       try {
@@ -69,7 +83,7 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
         // Server updated successfully, optimistic update was correct
       } catch (serverError) {
         // Revert optimistic update on server error
-        setStreamCards(originalStreamCards);
+        setStreamItems(originalStreamItems);
         throw serverError;
       }
     } catch (err: any) {
@@ -81,9 +95,11 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
   const handleDeleteCard = async (cardId: string) => {
     try {
       // Optimistically remove card from UI immediately
-      const originalStreamCards = streamCards;
-      const newStreamCards = streamCards.filter(sc => (sc.cardId || sc.id) !== cardId);
-      setStreamCards(newStreamCards);
+      const originalStreamItems = streamItems;
+      const newStreamItems = streamItems.filter(item => 
+        !(item.itemType === 'card' && (item.cardId || item.id) === cardId)
+      );
+      setStreamItems(newStreamItems);
       
       // Update server in background
       try {
@@ -91,7 +107,7 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
         // Server updated successfully, optimistic update was correct
       } catch (serverError) {
         // Revert optimistic update on server error
-        setStreamCards(originalStreamCards);
+        setStreamItems(originalStreamItems);
         throw serverError;
       }
     } catch (err: any) {
@@ -103,9 +119,11 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
   const handleDeleteCardFromBrain = async (cardId: string) => {
     try {
       // Optimistically remove card from UI immediately
-      const originalStreamCards = streamCards;
-      const newStreamCards = streamCards.filter(sc => (sc.cardId || sc.id) !== cardId);
-      setStreamCards(newStreamCards);
+      const originalStreamItems = streamItems;
+      const newStreamItems = streamItems.filter(item => 
+        !(item.itemType === 'card' && (item.cardId || item.id) === cardId)
+      );
+      setStreamItems(newStreamItems);
       
       // Update server in background - use hard delete to completely remove from brain
       try {
@@ -113,7 +131,7 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
         // Server updated successfully, optimistic update was correct
       } catch (serverError) {
         // Revert optimistic update on server error
-        setStreamCards(originalStreamCards);
+        setStreamItems(originalStreamItems);
         throw serverError;
       }
     } catch (err: any) {
@@ -124,28 +142,28 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
 
   const handleToggleCollapse = async (streamCardId: string) => {
     try {
-      const streamCard = streamCards.find(sc => sc.id === streamCardId);
-      if (!streamCard) return;
+      const streamItem = streamItems.find(item => item.itemType === 'card' && item.id === streamCardId);
+      if (!streamItem) return;
 
       // Optimistically update the UI immediately
-      const originalStreamCards = streamCards;
-      const newStreamCards = streamCards.map(sc => {
-        if (sc.id === streamCardId) {
-          return { ...sc, isCollapsed: !sc.isCollapsed };
+      const originalStreamItems = streamItems;
+      const newStreamItems = streamItems.map(item => {
+        if (item.itemType === 'card' && item.id === streamCardId) {
+          return { ...item, isCollapsed: !item.isCollapsed };
         }
-        return sc;
+        return item;
       });
-      setStreamCards(newStreamCards);
+      setStreamItems(newStreamItems);
 
       // Update server in background
       try {
         await api.put(`/streams/${streamId}/cards/${streamCardId}`, {
-          isCollapsed: !streamCard.isCollapsed
+          isCollapsed: !streamItem.isCollapsed
         });
         // Server updated successfully, optimistic update was correct
       } catch (serverError) {
         // Revert optimistic update on server error
-        setStreamCards(originalStreamCards);
+        setStreamItems(originalStreamItems);
         throw serverError;
       }
     } catch (err: any) {
@@ -157,9 +175,9 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
 
   // Position management functions
   const handleAddCardBelow = (afterPosition: number) => {
-    const cardAtPosition = streamCards.find(sc => sc.position === afterPosition);
-    if (cardAtPosition) {
-      setActiveCardIdForAdd(cardAtPosition.cardId || cardAtPosition.id || '');
+    const itemAtPosition = streamItems.find(item => item.position === afterPosition);
+    if (itemAtPosition) {
+      setActiveCardIdForAdd(itemAtPosition.cardId || itemAtPosition.id || '');
     }
   };
 
@@ -207,30 +225,32 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
 
   const handleMoveUp = async (cardId: string) => {
     try {
-      const currentIndex = streamCards.findIndex(sc => (sc.cardId || sc.id) === cardId);
+      const currentIndex = streamItems.findIndex(item => 
+        item.itemType === 'card' && (item.cardId || item.id) === cardId
+      );
       if (currentIndex <= 0) return; // Already at top
 
-      const currentCard = streamCards[currentIndex];
-      const targetCard = streamCards[currentIndex - 1];
+      const currentItem = streamItems[currentIndex];
+      const targetItem = streamItems[currentIndex - 1];
 
       // Store original state for potential revert
-      const originalStreamCards = [...streamCards];
+      const originalStreamItems = [...streamItems];
 
       // Optimistically update the UI immediately
-      const newStreamCards = [...streamCards];
-      newStreamCards[currentIndex] = targetCard;
-      newStreamCards[currentIndex - 1] = currentCard;
-      setStreamCards(newStreamCards);
+      const newStreamItems = [...streamItems];
+      newStreamItems[currentIndex] = targetItem;
+      newStreamItems[currentIndex - 1] = currentItem;
+      setStreamItems(newStreamItems);
 
       // Update server in background
       try {
         await api.put(`/streams/${streamId}/cards/${cardId}`, {
-          position: targetCard.position
+          position: targetItem.position
         });
         // Server updated successfully, optimistic update was correct
       } catch (serverError) {
         // Revert optimistic update on server error
-        setStreamCards(originalStreamCards);
+        setStreamItems(originalStreamItems);
         throw serverError;
       }
     } catch (err: any) {
@@ -241,30 +261,32 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
 
   const handleMoveDown = async (cardId: string) => {
     try {
-      const currentIndex = streamCards.findIndex(sc => (sc.cardId || sc.id) === cardId);
-      if (currentIndex >= streamCards.length - 1) return; // Already at bottom
+      const currentIndex = streamItems.findIndex(item => 
+        item.itemType === 'card' && (item.cardId || item.id) === cardId
+      );
+      if (currentIndex >= streamItems.length - 1) return; // Already at bottom
 
-      const currentCard = streamCards[currentIndex];
-      const targetCard = streamCards[currentIndex + 1];
+      const currentItem = streamItems[currentIndex];
+      const targetItem = streamItems[currentIndex + 1];
 
       // Store original state for potential revert
-      const originalStreamCards = [...streamCards];
+      const originalStreamItems = [...streamItems];
 
       // Optimistically update the UI immediately
-      const newStreamCards = [...streamCards];
-      newStreamCards[currentIndex] = targetCard;
-      newStreamCards[currentIndex + 1] = currentCard;
-      setStreamCards(newStreamCards);
+      const newStreamItems = [...streamItems];
+      newStreamItems[currentIndex] = targetItem;
+      newStreamItems[currentIndex + 1] = currentItem;
+      setStreamItems(newStreamItems);
 
       // Update server in background
       try {
         await api.put(`/streams/${streamId}/cards/${cardId}`, {
-          position: targetCard.position
+          position: targetItem.position
         });
         // Server updated successfully, optimistic update was correct
       } catch (serverError) {
         // Revert optimistic update on server error
-        setStreamCards(originalStreamCards);
+        setStreamItems(originalStreamItems);
         throw serverError;
       }
     } catch (err: any) {
@@ -364,11 +386,12 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
                 
               case 'chunk':
                 // Update local state with new content
-                setStreamCards(prev => prev.map(sc => 
-                  sc.id === newCardId || (sc as any).cardId === newCardId
-                    ? { ...sc, content: data.totalContent, contentPreview: data.totalContent }
-                    : sc
-                ));
+                setStreamItems(prev => prev.map(item => {
+                  if (item.itemType === 'card' && (item.id === newCardId || (item as any).cardId === newCardId)) {
+                    return { ...item, content: data.totalContent, contentPreview: data.totalContent };
+                  }
+                  return item;
+                }));
                 break;
                 
               case 'complete':
@@ -446,11 +469,12 @@ Note: Real AI integration requires proper nginx configuration to forward /api/ai
             await api.put(`/cards/${newCardId}`, { content: currentContent });
             
             // Update local state to reflect changes
-            setStreamCards(prev => prev.map(sc => 
-              sc.id === newCardId || (sc as any).cardId === newCardId
-                ? { ...sc, content: currentContent, contentPreview: currentContent }
-                : sc
-            ));
+            setStreamItems(prev => prev.map(item => {
+              if (item.itemType === 'card' && (item.id === newCardId || (item as any).cardId === newCardId)) {
+                return { ...item, content: currentContent, contentPreview: currentContent };
+              }
+              return item;
+            }));
             
             // Wait a bit to simulate streaming
             await new Promise(resolve => setTimeout(resolve, 50));
@@ -473,6 +497,114 @@ Note: Real AI integration requires proper nginx configuration to forward /api/ai
       generationController.abort();
       setGeneratingCardId(null);
       setGenerationController(null);
+    }
+  };
+
+  const handleUploadFileBelow = (afterPosition: number) => {
+    const itemId = streamItems.find(item => item.position === afterPosition)?.id || 
+                  (streamItems.find(item => item.cardId) as any)?.cardId || 
+                  `position-${afterPosition}`;
+    setActiveCardIdForUpload(itemId);
+  };
+
+  const handleFileUploaded = async (uploadedFile: any) => {
+    try {
+      // Close upload interface
+      setActiveCardIdForUpload(null);
+      
+      // Reload stream to show new file
+      await loadStream();
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to add uploaded file';
+      setGlobalError(errorMessage);
+    }
+  };
+
+  const handleCancelUpload = () => {
+    setActiveCardIdForUpload(null);
+  };
+
+  // Add existing file handlers
+  const handleAddFileBelow = (afterPosition: number) => {
+    const itemId = streamItems.find(item => item.position === afterPosition)?.id || 
+                  (streamItems.find(item => item.cardId) as any)?.cardId || 
+                  `position-${afterPosition}`;
+    setActiveCardIdForFileAdd(itemId);
+  };
+
+  const handleAddExistingFile = async (file: any, insertAfterPosition: number | null) => {
+    try {
+      // Save scroll position before operation
+      const scrollPosition = window.scrollY;
+      
+      const requestBody: any = {
+        fileId: file.id,
+        isCollapsed: false,
+        depth: 0
+      };
+      
+      // Only add position if it's not null (null means add at end)
+      if (insertAfterPosition !== null) {
+        requestBody.position = insertAfterPosition;
+      }
+
+      await api.post(`/streams/${streamId}/files`, requestBody);
+
+      setActiveCardIdForFileAdd(null);
+      await loadStream();
+      
+      // Restore scroll position after reload
+      setTimeout(() => {
+        window.scrollTo(0, scrollPosition);
+      }, 50);
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to add file to stream';
+      setGlobalError(errorMessage);
+    }
+  };
+
+  const handleCancelFileAdd = () => {
+    setActiveCardIdForFileAdd(null);
+  };
+
+  // File handling functions
+  const handleDeleteFile = async (fileId: string) => {
+    try {
+      await api.delete(`/streams/${streamId}/files/${fileId}`);
+      await loadStream(); // Reload to reflect changes
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to remove file';
+      setGlobalError(errorMessage);
+    }
+  };
+
+  const handleMoveFileUp = async (fileId: string) => {
+    try {
+      // Find current file position
+      const fileIndex = streamItems.findIndex(item => item.id === fileId && item.itemType === 'file');
+      if (fileIndex <= 0) return; // Already at top
+
+      const newPosition = fileIndex - 1;
+      await api.put(`/streams/${streamId}/files/${fileId}`, { position: newPosition });
+      await loadStream(); // Reload to reflect changes
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to move file';
+      setGlobalError(errorMessage);
+    }
+  };
+
+  const handleMoveFileDown = async (fileId: string) => {
+    try {
+      // Find current file position
+      const fileIndex = streamItems.findIndex(item => item.id === fileId && item.itemType === 'file');
+      if (fileIndex >= streamItems.length - 1) return; // Already at bottom
+
+      const newPosition = fileIndex + 1;
+      await api.put(`/streams/${streamId}/files/${fileId}`, { position: newPosition });
+      await loadStream(); // Reload to reflect changes
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to move file';
+      setGlobalError(errorMessage);
     }
   };
 
@@ -570,7 +702,7 @@ Note: Real AI integration requires proper nginx configuration to forward /api/ai
         borderBottom: '1px solid #e5e7eb'
       }}>
         <div style={{ color: '#6b7280', fontSize: '14px' }}>
-          {streamCards.length} card{streamCards.length !== 1 ? 's' : ''} in stream
+          {streamItems.length} item{streamItems.length !== 1 ? 's' : ''} in stream
         </div>
         <button
           onClick={handleRefreshStream}
@@ -592,38 +724,72 @@ Note: Real AI integration requires proper nginx configuration to forward /api/ai
         </button>
       </div>
 
-      {/* Stream cards */}
-      {streamCards.map((streamCard, index) => {
-        const cardId = streamCard.cardId || streamCard.id || '';
-        return (
-          <Card
-            key={cardId}
-            card={streamCard as any} // StreamCard contains all Card properties
-            streamCard={streamCard}  
-            streamId={streamId}
-            brainId={brainId}
-            onUpdate={handleUpdateCard}
-            onDelete={handleDeleteCard}
-            onDeleteFromBrain={handleDeleteCardFromBrain}
-            onToggleCollapse={handleToggleCollapse}
-            onAddCardBelow={handleAddCardBelow}
-            onCreateCardBelow={handleCreateCardBelow}
-            onGenerateCardBelow={handleGenerateCardBelow}
-            isGenerating={generatingCardId === cardId}
-            onStopGeneration={handleStopGeneration}
-            onMoveUp={handleMoveUp}
-            onMoveDown={handleMoveDown}
-            isFirst={index === 0}
-            isLast={index === streamCards.length - 1}
-            showAddInterface={activeCardIdForAdd === cardId}
-            onAddCard={handleInlineAddCard}
-            onCancelAdd={handleCancelAdd}
-          />
-        );
+      {/* Stream items (both cards and files) */}
+      {streamItems.map((item, index) => {
+        const itemId = item.id || '';
+        
+        if (item.itemType === 'file') {
+          // Render file viewer
+          return (
+            <FileViewer
+              key={`file-${itemId}`}
+              file={item}
+              streamId={streamId}
+              brainId={brainId}
+              onDelete={(fileId) => handleDeleteFile(fileId)}
+              onMoveUp={(fileId) => handleMoveFileUp(fileId)}
+              onMoveDown={(fileId) => handleMoveFileDown(fileId)}
+              isFirst={index === 0}
+              isLast={index === streamItems.length - 1}
+              onAddCardBelow={handleAddCardBelow}
+              onCreateCardBelow={handleCreateCardBelow}
+              onGenerateCardBelow={handleGenerateCardBelow}
+              onUploadFileBelow={handleUploadFileBelow}
+              onAddFileBelow={handleAddFileBelow}
+            />
+          );
+        } else if (item.itemType === 'card') {
+          // Render card
+          return (
+            <Card
+              key={`card-${itemId}`}
+              card={item as any}
+              streamCard={item as any}  
+              streamId={streamId}
+              brainId={brainId}
+              onUpdate={handleUpdateCard}
+              onDelete={handleDeleteCard}
+              onDeleteFromBrain={handleDeleteCardFromBrain}
+              onToggleCollapse={handleToggleCollapse}
+              onAddCardBelow={handleAddCardBelow}
+              onCreateCardBelow={handleCreateCardBelow}
+              onGenerateCardBelow={handleGenerateCardBelow}
+              onUploadFileBelow={handleUploadFileBelow}
+              isGenerating={generatingCardId === itemId}
+              onStopGeneration={handleStopGeneration}
+              onMoveUp={handleMoveUp}
+              onMoveDown={handleMoveDown}
+              isFirst={index === 0}
+              isLast={index === streamItems.length - 1}
+              showAddInterface={activeCardIdForAdd === itemId}
+              onAddCard={handleInlineAddCard}
+              onCancelAdd={handleCancelAdd}
+              showUploadInterface={activeCardIdForUpload === itemId}
+              onFileUploaded={handleFileUploaded}
+              onCancelUpload={handleCancelUpload}
+              onAddFileBelow={handleAddFileBelow}
+              showFileAddInterface={activeCardIdForFileAdd === itemId}
+              onAddFile={handleAddExistingFile}
+              onCancelFileAdd={handleCancelFileAdd}
+            />
+          );
+        }
+        
+        return null;
       })}
 
 
-      {streamCards.length === 0 && (
+      {streamItems.length === 0 && (
         <div className="text-center" style={{ padding: '2rem', color: '#6b7280' }}>
           <p>This stream is empty.</p>
           <div className="flex gap-md justify-center" style={{ marginTop: '1rem' }}>
@@ -641,18 +807,61 @@ Note: Real AI integration requires proper nginx configuration to forward /api/ai
             >
               ✨ Create Card
             </button>
+            <button
+              onClick={() => setActiveCardIdForUpload('empty-stream')}
+              className="btn btn-small"
+              title="Upload PDF or EPUB file"
+              style={{ 
+                backgroundColor: '#16a34a',
+                color: 'white'
+              }}
+            >
+              📁 Upload File
+            </button>
+            <button
+              onClick={() => setActiveCardIdForFileAdd('empty-stream')}
+              className="btn btn-small"
+              title="Add existing file from this brain"
+              style={{ 
+                backgroundColor: '#8b5cf6',
+                color: 'white'
+              }}
+            >
+              📚 Add File
+            </button>
           </div>
         </div>
       )}
       
       {/* Empty stream interfaces */}
-      {streamCards.length === 0 && activeCardIdForAdd === 'empty-stream' && (
+      {streamItems.length === 0 && activeCardIdForAdd === 'empty-stream' && (
         <CardSearchInterface
           brainId={brainId}
           streamId={streamId}
           streamCards={[]}
           onCardSelected={(card) => handleInlineAddCard(card.id, null)}
           onCancel={handleCancelAdd}
+        />
+      )}
+      
+      {/* Empty stream file upload interface */}
+      {streamItems.length === 0 && activeCardIdForUpload === 'empty-stream' && (
+        <FileUploadInterface
+          brainId={brainId}
+          streamId={streamId}
+          position={0}
+          onFileUploaded={handleFileUploaded}
+          onCancel={handleCancelUpload}
+        />
+      )}
+      
+      {/* Empty stream file add interface */}
+      {streamItems.length === 0 && activeCardIdForFileAdd === 'empty-stream' && (
+        <FileSearchInterface
+          brainId={brainId}
+          streamId={streamId}
+          onFileSelected={(file) => handleAddExistingFile(file, null)}
+          onCancel={handleCancelFileAdd}
         />
       )}
       

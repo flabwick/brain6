@@ -764,11 +764,27 @@ class Card {
       isBrainWide: this.isBrainWide,
       streamSpecificId: this.streamSpecificId,
       fileId: this.fileId,
+      isFileCard: this.cardType === 'file' || !!this.fileId,
       hasTitle: this.hasTitle(),
       isSavedToBrain: this.isSavedToBrain(),
       canBeInAIContext: this.canBeInAIContext(),
       typeInfo: typeInfo
     };
+
+    // If this is a file card, get file type information
+    if (this.fileId) {
+      try {
+        const fileResult = await query(
+          'SELECT file_type FROM files WHERE id = $1',
+          [this.fileId]
+        );
+        if (fileResult.rows.length > 0) {
+          data.fileType = fileResult.rows[0].file_type;
+        }
+      } catch (error) {
+        console.error('Failed to get file type for card:', error);
+      }
+    }
 
     if (includeContent) {
       data.content = await this.getContent();

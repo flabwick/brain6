@@ -413,24 +413,24 @@ class StreamCard {
       ORDER BY sc.position
     `, [streamId]);
 
-    return result.rows.map(row => ({
-      id: row.id,
-      brainId: row.brain_id,
-      title: row.title,
-      contentPreview: row.content_preview,
-      fileSize: row.file_size,
-      hasFile: !!row.file_path,
-      filePath: row.file_path,
-      lastModified: row.last_modified,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      // Stream-specific metadata
-      position: row.position,
-      depth: row.depth,
-      isInAIContext: row.is_in_ai_context,
-      isCollapsed: row.is_collapsed,
-      addedAt: row.added_at
-    }));
+    const Card = require('./Card');
+    const cards = [];
+    
+    for (const row of result.rows) {
+      const card = new Card(row);
+      const cardData = await card.toJSON(false); // Get full card data with file info
+      
+      // Add stream-specific metadata
+      cardData.position = row.position;
+      cardData.depth = row.depth;
+      cardData.isInAIContext = row.is_in_ai_context;
+      cardData.isCollapsed = row.is_collapsed;
+      cardData.addedAt = row.added_at;
+      
+      cards.push(cardData);
+    }
+    
+    return cards;
   }
 
   /**

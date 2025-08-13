@@ -262,6 +262,72 @@ router.get('/:id/cards/check-title', async (req, res) => {
 });
 
 /**
+ * GET /api/brains/:id/files
+ * Get all files in a brain
+ */
+router.get('/:id/files', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Validate UUID format
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'Brain ID must be a valid UUID'
+      });
+    }
+
+    const brain = await Brain.findById(id);
+    
+    if (!brain) {
+      return res.status(404).json({
+        error: 'Brain not found',
+        message: 'The requested brain does not exist'
+      });
+    }
+
+    // Check ownership
+    if (brain.userId !== req.session.userId) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'You do not have permission to access this brain'
+      });
+    }
+
+    // Get files from database
+    const db = require('../models/database');
+    const result = await db.query(`
+      SELECT 
+        f.*,
+        CASE 
+          WHEN f.file_type = 'pdf' THEN f.pdf_title
+          WHEN f.file_type = 'epub' THEN f.epub_title
+          ELSE f.file_name
+        END as display_title
+      FROM files f 
+      WHERE f.brain_id = $1
+      ORDER BY f.uploaded_at DESC
+    `, [id]);
+
+    const files = result.rows || [];
+    
+    res.json({
+      files: files,
+      totalFiles: files.length,
+      brainId: id,
+      brainName: brain.name
+    });
+
+  } catch (error) {
+    console.error('❌ Get brain files error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve files',
+      message: 'An error occurred while fetching brain files'
+    });
+  }
+});
+
+/**
  * DELETE /api/brains/:id
  * Delete a brain (archives files, removes from database)
  */
@@ -423,6 +489,187 @@ router.post('/:id/welcome', async (req, res) => {
     res.status(500).json({
       error: 'Failed to recreate welcome stream',
       message: 'An error occurred while recreating the welcome stream'
+    });
+  }
+});
+
+/**
+ * GET /api/brains/:id/files
+ * Get all files in a brain
+ */
+router.get('/:id/files', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Validate UUID format
+    if (!validateUUID(id)) {
+      return res.status(400).json({
+        error: 'Invalid brain ID',
+        message: 'Brain ID must be a valid UUID'
+      });
+    }
+    
+    const brain = await Brain.findById(id);
+    
+    if (!brain) {
+      return res.status(404).json({
+        error: 'Brain not found',
+        message: 'The requested brain does not exist'
+      });
+    }
+
+    // Check ownership
+    if (brain.userId !== req.session.userId) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'You do not have permission to access this brain'
+      });
+    }
+
+    // Get files from database
+    const { query } = require('../models/database');
+    const result = await query(`
+      SELECT 
+        id,
+        brain_id,
+        file_name,
+        file_type,
+        file_size,
+        file_path,
+        pdf_page_count,
+        pdf_author,
+        pdf_title,
+        epub_title,
+        epub_author,
+        epub_description,
+        epub_chapter_count,
+        content_preview,
+        processing_status,
+        uploaded_at
+      FROM files
+      WHERE brain_id = $1
+      ORDER BY uploaded_at DESC
+    `, [id]);
+
+    const files = result.rows.map(row => ({
+      id: row.id,
+      brainId: row.brain_id,
+      fileName: row.file_name,
+      fileType: row.file_type,
+      fileSize: row.file_size,
+      filePath: row.file_path,
+      // Use appropriate title/author based on file type
+      title: row.file_type === 'epub' ? row.epub_title : row.pdf_title,
+      author: row.file_type === 'epub' ? row.epub_author : row.pdf_author,
+      description: row.epub_description,
+      pageCount: row.pdf_page_count,
+      chapterCount: row.epub_chapter_count,
+      contentPreview: row.content_preview,
+      processingStatus: row.processing_status,
+      uploadedAt: row.uploaded_at
+    }));
+
+    res.json({
+      files,
+      count: files.length,
+      brainId: id
+    });
+
+  } catch (error) {
+    console.error('❌ Get brain files error:', error);
+    res.status(500).json({
+      error: 'Failed to get brain files',
+      message: 'An error occurred while fetching brain files'
+    });
+  }
+});
+
+/**
+ * DELETE /api/brains/:id/files/:fileId
+ * Delete a file from a brain
+ */
+router.delete('/:id/files/:fileId', async (req, res) => {
+  try {
+    const { id, fileId } = req.params;
+    
+    // Validate UUID formats
+    if (!validateUUID(id) || !validateUUID(fileId)) {
+      return res.status(400).json({
+        error: 'Invalid ID',
+        message: 'Brain ID and file ID must be valid UUIDs'
+      });
+    }
+    
+    const brain = await Brain.findById(id);
+    
+    if (!brain) {
+      return res.status(404).json({
+        error: 'Brain not found',
+        message: 'The requested brain does not exist'
+      });
+    }
+
+    // Check ownership
+    if (brain.userId !== req.session.userId) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'You do not have permission to delete files from this brain'
+      });
+    }
+
+    // Get file information before deletion
+    const { query } = require('../models/database');
+    const fileResult = await query(`
+      SELECT file_path, file_name, cover_image_path
+      FROM files
+      WHERE id = $1 AND brain_id = $2
+    `, [fileId, id]);
+
+    if (fileResult.rows.length === 0) {
+      return res.status(404).json({
+        error: 'File not found',
+        message: 'The requested file does not exist in this brain'
+      });
+    }
+
+    const file = fileResult.rows[0];
+    const fs = require('fs-extra');
+
+    // Delete file from filesystem
+    try {
+      if (file.file_path && await fs.pathExists(file.file_path)) {
+        await fs.remove(file.file_path);
+        console.log(`✅ Deleted file from filesystem: ${file.file_path}`);
+      }
+
+      // Delete cover image if it exists
+      if (file.cover_image_path && await fs.pathExists(file.cover_image_path)) {
+        await fs.remove(file.cover_image_path);
+        console.log(`✅ Deleted cover image: ${file.cover_image_path}`);
+      }
+    } catch (fsError) {
+      console.warn('⚠️ Could not delete file from filesystem:', fsError.message);
+      // Continue with database deletion even if file system deletion fails
+    }
+
+    // Remove file references from all streams first
+    await query('DELETE FROM stream_files WHERE file_id = $1', [fileId]);
+
+    // Delete file record from database
+    await query('DELETE FROM files WHERE id = $1', [fileId]);
+
+    res.json({
+      success: true,
+      message: `File "${file.file_name}" deleted successfully`,
+      fileId,
+      fileName: file.file_name
+    });
+
+  } catch (error) {
+    console.error('❌ Delete file error:', error);
+    res.status(500).json({
+      error: 'Failed to delete file',
+      message: 'An error occurred while deleting the file'
     });
   }
 });

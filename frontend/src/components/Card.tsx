@@ -5,6 +5,10 @@ import { useApp } from '../contexts/AppContext';
 import api from '../services/api';
 import CardSearchInterface from './CardSearchInterface';
 import GenerateInterface from './GenerateInterface';
+import FileUploadInterface from './FileUploadInterface';
+import FileSearchInterface from './FileSearchInterface';
+import PDFCard from './PDFCard';
+import EPUBCard from './EPUBCard';
 
 interface CardProps {
   card: CardType;
@@ -19,6 +23,7 @@ interface CardProps {
   onAddCardBelow?: (afterPosition: number) => void;
   onCreateCardBelow?: (afterPosition: number) => void;
   onGenerateCardBelow?: (afterPosition: number, prompt: string, model: string) => void;
+  onUploadFileBelow?: (afterPosition: number) => void;
   isGenerating?: boolean;
   onStopGeneration?: () => void;
   onMoveUp?: (cardId: string) => void;
@@ -28,6 +33,13 @@ interface CardProps {
   showAddInterface?: boolean;
   onAddCard?: (cardId: string, position: number) => void;
   onCancelAdd?: () => void;
+  showUploadInterface?: boolean;
+  onFileUploaded?: (fileCard: any) => void;
+  onCancelUpload?: () => void;
+  onAddFileBelow?: (afterPosition: number) => void;
+  showFileAddInterface?: boolean;
+  onAddFile?: (file: any, position: number) => void;
+  onCancelFileAdd?: () => void;
 }
 
 const Card: React.FC<CardProps> = ({
@@ -43,6 +55,7 @@ const Card: React.FC<CardProps> = ({
   onAddCardBelow,
   onCreateCardBelow,
   onGenerateCardBelow,
+  onUploadFileBelow,
   isGenerating = false,
   onStopGeneration,
   onMoveUp,
@@ -52,6 +65,13 @@ const Card: React.FC<CardProps> = ({
   showAddInterface = false,
   onAddCard,
   onCancelAdd,
+  showUploadInterface = false,
+  onFileUploaded,
+  onCancelUpload,
+  onAddFileBelow,
+  showFileAddInterface = false,
+  onAddFile,
+  onCancelFileAdd,
 }) => {
   const [isEditingTitle, setIsEditingTitle] = useState(!card.title);
   const [isEditingContent, setIsEditingContent] = useState(false);
@@ -270,6 +290,58 @@ const Card: React.FC<CardProps> = ({
   const titleStyle = depth > 0 ? {
     fontSize: `${Math.max(13, 15 - depth)}px`
   } : {};
+
+  // Check if this is a file card and render appropriate component
+  if ((card as any).isFileCard || (card as any).fileId || (card as any).cardType === 'file') {
+    console.log('File card detected:', { 
+      cardType: (card as any).cardType, 
+      fileId: (card as any).fileId,
+      fileType: (card as any).fileType,
+      isFileCard: (card as any).isFileCard,
+      content: card.content
+    });
+    
+    // Determine file type from card metadata or content indicators
+    const isPDFCard = (card as any).fileType === 'pdf' || 
+                      card.title?.toLowerCase().includes('pdf') ||
+                      card.content?.includes('PDF Document');
+    const isEPUBCard = (card as any).fileType === 'epub' || 
+                       card.title?.toLowerCase().includes('epub') ||
+                       card.content?.includes('EPUB eBook') ||
+                       card.content?.startsWith('File:'); // New file cards start with "File:"
+    
+    if (isPDFCard) {
+      return (
+        <PDFCard
+          card={card}
+          streamCard={streamCard}
+          streamId={streamId}
+          brainId={brainId}
+          depth={depth}
+          onDelete={onDelete}
+          onMoveUp={onMoveUp}
+          onMoveDown={onMoveDown}
+          isFirst={isFirst}
+          isLast={isLast}
+        />
+      );
+    } else if (isEPUBCard) {
+      return (
+        <EPUBCard
+          card={card}
+          streamCard={streamCard}
+          streamId={streamId}
+          brainId={brainId}
+          depth={depth}
+          onDelete={onDelete}
+          onMoveUp={onMoveUp}
+          onMoveDown={onMoveDown}
+          isFirst={isFirst}
+          isLast={isLast}
+        />
+      );
+    }
+  }
 
   return (
     <div className={cardClasses} data-card-id={cardId}>
@@ -632,7 +704,7 @@ const Card: React.FC<CardProps> = ({
       )}
       
       {/* Card Action Buttons - Add/Create below this card */}
-      {(onAddCardBelow || onCreateCardBelow) && displayState > 0 && (
+      {(onAddCardBelow || onCreateCardBelow || onUploadFileBelow) && displayState > 0 && (
         <div className="card-actions" style={{
           display: 'flex',
           gap: '8px',
@@ -641,7 +713,7 @@ const Card: React.FC<CardProps> = ({
           backgroundColor: '#fafbfc',
           justifyContent: 'center'
         }}>
-          {onAddCardBelow && !showAddInterface && (
+          {onAddCardBelow && !showAddInterface && !showUploadInterface && (
             <button
               type="button"
               className="btn btn-small"
@@ -657,7 +729,7 @@ const Card: React.FC<CardProps> = ({
               📎 Add Card
             </button>
           )}
-          {onCreateCardBelow && !showAddInterface && !showGenerateInterface && (
+          {onCreateCardBelow && !showAddInterface && !showGenerateInterface && !showUploadInterface && (
             <button
               type="button"
               className="btn btn-small btn-secondary"
@@ -673,7 +745,7 @@ const Card: React.FC<CardProps> = ({
               ✨ Create Card
             </button>
           )}
-          {onGenerateCardBelow && !showAddInterface && !showGenerateInterface && (
+          {onGenerateCardBelow && !showAddInterface && !showGenerateInterface && !showUploadInterface && (
             <button
               type="button"
               className="btn btn-small btn-primary"
@@ -687,6 +759,42 @@ const Card: React.FC<CardProps> = ({
               }}
             >
               🤖 Generate Card
+            </button>
+          )}
+          {onUploadFileBelow && !showAddInterface && !showGenerateInterface && !showUploadInterface && !showFileAddInterface && (
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => onUploadFileBelow(streamCard.position)}
+              title="Upload PDF or EPUB file below this card"
+              style={{ 
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                backgroundColor: '#16a34a',
+                color: 'white'
+              }}
+            >
+              📁 Upload File
+            </button>
+          )}
+          {onAddFileBelow && !showAddInterface && !showGenerateInterface && !showUploadInterface && !showFileAddInterface && (
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={() => onAddFileBelow(streamCard.position)}
+              title="Add existing file below this card"
+              style={{ 
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                backgroundColor: '#8b5cf6',
+                color: 'white'
+              }}
+            >
+              📚 Add File
             </button>
           )}
         </div>
@@ -714,6 +822,27 @@ const Card: React.FC<CardProps> = ({
             setShowGenerateInterface(false);
           }}
           onCancel={() => setShowGenerateInterface(false)}
+        />
+      )}
+      
+      {/* File Upload Interface */}
+      {showUploadInterface && onFileUploaded && onCancelUpload && (
+        <FileUploadInterface
+          brainId={brainId}
+          streamId={streamId}
+          position={streamCard.position}
+          onFileUploaded={onFileUploaded}
+          onCancel={onCancelUpload}
+        />
+      )}
+      
+      {/* File Search Interface */}
+      {showFileAddInterface && onAddFile && onCancelFileAdd && (
+        <FileSearchInterface
+          brainId={brainId}
+          streamId={streamId}
+          onFileSelected={(file) => onAddFile(file, streamCard.position)}
+          onCancel={onCancelFileAdd}
         />
       )}
       
