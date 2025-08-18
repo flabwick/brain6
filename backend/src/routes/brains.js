@@ -9,6 +9,20 @@ const { recreateWelcomeStream } = require('../services/welcomeContent');
 // All brain routes require authentication
 router.use(requireAuth);
 
+// Helper function for brain ownership validation
+const validateBrainOwnership = async (brainId, userId) => {
+  const brain = await Brain.findById(brainId);
+  if (!brain) {
+    return { valid: false, status: 404, error: 'Brain not found', message: 'The requested brain does not exist' };
+  }
+  
+  if (brain.userId !== userId) {
+    return { valid: false, status: 403, error: 'Access denied', message: 'You do not have permission to access this brain' };
+  }
+  
+  return { valid: true, brain };
+};
+
 // Input validation helpers
 const validateBrainInput = (name) => {
   const errors = {};
@@ -670,6 +684,104 @@ router.delete('/:id/files/:fileId', async (req, res) => {
     res.status(500).json({
       error: 'Failed to delete file',
       message: 'An error occurred while deleting the file'
+    });
+  }
+});
+
+/**
+ * GET /api/brains/:id/files/:fileId/cover
+ * Serve cover image for a file
+ */
+router.get('/:id/files/:fileId/cover', async (req, res) => {
+  try {
+    const { id: brainId, fileId } = req.params;
+    
+    // Validate brain ownership
+    const brainValidation = await validateBrainOwnership(brainId, req.session.userId);
+    if (!brainValidation.valid) {
+      return res.status(brainValidation.status).json({
+        error: brainValidation.error,
+        message: brainValidation.message
+      });
+    }
+
+    const brain = brainValidation.brain;
+
+    // Get file info from database
+    const { query } = require('../models/database');
+    const fileResult = await query(`
+      SELECT file_path, file_name, file_type, cover_image_path
+      FROM files
+      WHERE id = $1 AND brain_id = $2
+    `, [fileId, brainId]);
+
+    if (fileResult.rows.length === 0) {
+      return res.status(404).json({
+        error: 'File not found',
+        message: 'The requested file does not exist'
+      });
+    }
+
+    const file = fileResult.rows[0];
+    
+    // Check if this is an EPUB file
+    if (file.file_type !== 'epub') {
+      return res.status(400).json({
+        error: 'Invalid file type',
+        message: 'Cover images are only available for EPUB files'
+      });
+    }
+
+    // Construct cover image path
+    const path = require('path');
+    const fs = require('fs-extra');
+    
+    let coverPath = file.cover_image_path;
+    
+    // If no cover_image_path in database, try to find it in the covers subdirectory
+    if (!coverPath) {
+      const brainFolderPath = brain.folderPath || 
+                             path.join(process.cwd(), 'backend', 'storage', brain.userId, 'brains', brain.name);
+      const coversDir = path.join(brainFolderPath, 'files', 'covers');
+      const baseFileName = path.basename(file.file_name, '.epub');
+      
+      // Try different extensions
+      const possibleExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+      for (const ext of possibleExtensions) {
+        const possiblePath = path.join(coversDir, `${baseFileName}_cover${ext}`);
+        if (await fs.pathExists(possiblePath)) {
+          coverPath = possiblePath;
+          break;
+        }
+      }
+    }
+
+    if (!coverPath || !(await fs.pathExists(coverPath))) {
+      return res.status(404).json({
+        error: 'Cover image not found',
+        message: 'No cover image available for this EPUB file'
+      });
+    }
+
+    // Determine content type from file extension
+    const ext = path.extname(coverPath).toLowerCase();
+    let contentType = 'image/jpeg'; // default
+    if (ext === '.png') contentType = 'image/png';
+    else if (ext === '.gif') contentType = 'image/gif';
+    else if (ext === '.webp') contentType = 'image/webp';
+
+    // Serve the image file
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+    
+    const imageBuffer = await fs.readFile(coverPath);
+    res.send(imageBuffer);
+
+  } catch (error) {
+    console.error('❌ Serve cover image error:', error);
+    res.status(500).json({
+      error: 'Failed to serve cover image',
+      message: 'An error occurred while serving the cover image'
     });
   }
 });

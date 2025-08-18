@@ -269,18 +269,60 @@ const FileViewer: React.FC<FileViewerProps> = ({
 
 // EPUB Viewer Component
 const EPUBViewer: React.FC<{ file: any }> = ({ file }) => {
+  const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Try to load cover image if available
+    if (file.coverImagePath) {
+      loadCoverImage(file.id, file.coverImagePath);
+    }
+  }, [file.id, file.coverImagePath]);
+
+  const loadCoverImage = async (fileId: string, coverPath: string) => {
+    try {
+      const response = await api.get(`/brains/${file.brainId}/files/${fileId}/cover`, {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data]);
+      const url = URL.createObjectURL(blob);
+      setCoverImageUrl(url);
+    } catch (error) {
+      console.error('Failed to load cover image:', error);
+      // Not critical, just no cover image
+    }
+  };
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (coverImageUrl && coverImageUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(coverImageUrl);
+      }
+    };
+  }, [coverImageUrl]);
+
   return (
     <div className="epub-viewer-portrait">
       <div className="epub-book-display">
         {/* Cover Image Column */}
         <div className="epub-cover-column">
-          <div className="epub-cover-placeholder">
-            <div className="cover-icon">📚</div>
-            <div className="cover-text">
-              <div className="cover-title">{file.title || file.fileName}</div>
-              <div className="cover-author">{file.author || 'Unknown Author'}</div>
+          {coverImageUrl ? (
+            <div className="epub-cover-container">
+              <img 
+                src={coverImageUrl} 
+                alt={`Cover of ${file.title || file.fileName}`}
+                className="epub-cover-image"
+              />
             </div>
-          </div>
+          ) : (
+            <div className="epub-cover-placeholder">
+              <div className="cover-icon">📚</div>
+              <div className="cover-text">
+                <div className="cover-title">{file.title || file.fileName}</div>
+                <div className="cover-author">{file.author || 'Unknown Author'}</div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Book Information Column */}

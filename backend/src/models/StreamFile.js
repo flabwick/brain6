@@ -131,6 +131,7 @@ class StreamFile {
       epubAuthor: row.epub_author,
       epubDescription: row.epub_description,
       epubChapterCount: row.epub_chapter_count,
+      coverImagePath: row.cover_image_path,
       // Common metadata
       contentPreview: row.content_preview,
       processingStatus: row.processing_status,
@@ -205,6 +206,7 @@ class StreamFile {
             description: fileRow.epub_description,
             pageCount: fileRow.pdf_page_count,
             chapterCount: fileRow.epub_chapter_count,
+            coverImagePath: fileRow.cover_image_path,
             // Common fields
             contentPreview: fileRow.content_preview,
             processingStatus: fileRow.processing_status,

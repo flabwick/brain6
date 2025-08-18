@@ -1201,11 +1201,11 @@ router.post('/upload-file', upload.single('file'), async (req, res) => {
         // Create output directory for cover images
         const brainFolderPath = brain.folderPath || 
                                path.join(process.cwd(), 'backend', 'storage', brain.userId || req.session.userId, 'brains', brain.name);
-        const coverOutputDir = path.join(brainFolderPath, 'covers');
+        const filesDir = path.join(brainFolderPath, 'files');
         
         processResult = await epubProcessor.processEpubFile(tempFilePath, {
           title: path.basename(req.file.originalname, '.epub'),
-          outputDir: coverOutputDir
+          filesDir: filesDir
         });
       }
       console.log(`Successfully processed file, got result:`, {

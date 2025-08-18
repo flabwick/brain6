@@ -532,6 +532,27 @@ class CardProcessor {
       throw error;
     }
   }
+
+  /**
+   * Generate unique title for card within brain
+   * @param {string} brainId - Brain ID
+   * @param {string} baseTitle - Base title to make unique
+   * @returns {Promise<string>} - Unique title
+   */
+  async generateUniqueTitle(brainId, baseTitle) {
+    let uniqueTitle = baseTitle;
+    let counter = 1;
+    
+    while (true) {
+      const existingCard = await Card.findByBrainAndTitle(brainId, uniqueTitle);
+      if (!existingCard) {
+        return uniqueTitle;
+      }
+      
+      uniqueTitle = `${baseTitle} (${counter})`;
+      counter++;
+    }
+  }
 }
 
 // Export singleton instance

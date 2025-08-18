@@ -164,6 +164,7 @@ class FileWatcher {
     const parts = relativePath.split(path.sep);
 
     // Expected structure: username/brains/brain-name/cards|files/filename
+    // or username/brains/brain-name/files/covers/filename (ignore covers)
     if (parts.length < 4) {
       return null; // Not deep enough to be a card or file
     }
@@ -172,6 +173,11 @@ class FileWatcher {
 
     if (brainsDir !== 'brains' || !['cards', 'files'].includes(fileType)) {
       return null; // Not in the right directory structure
+    }
+
+    // Skip cover images - they are managed by EPUB processor, not file watcher
+    if (fileType === 'files' && fileNameParts.length > 0 && fileNameParts[0] === 'covers') {
+      return null; // Ignore files in covers subdirectory
     }
 
     const fileName = fileNameParts.join(path.sep);

@@ -7,49 +7,47 @@ const { query, transaction } = require('../models/database');
  */
 class CardFactory {
   /**
-   * Create a saved card (permanent, brain-wide)
+   * Create a titled card (appears in cards list)
    * @param {string} brainId - Brain ID
    * @param {string} title - Card title
    * @param {string} content - Card content (markdown)
    * @param {Object} options - Additional options
-   * @returns {Promise<Card>} - Created saved card
+   * @returns {Promise<Card>} - Created titled card
    */
-  static async createSavedCard(brainId, title, content, options = {}) {
+  static async createTitledCard(brainId, title, content, options = {}) {
     if (!title || title.trim().length === 0) {
-      throw new Error('Title is required for saved cards');
+      throw new Error('Title is required for titled cards');
     }
 
     if (!content) {
-      throw new Error('Content is required for saved cards');
+      throw new Error('Content is required for titled cards');
     }
 
     const card = await Card.create(brainId, title, {
       content,
-      cardType: 'saved',
       ...options
     });
 
-    console.log(`✅ Created saved card: ${title}`);
+    console.log(`✅ Created titled card: ${title}`);
     return card;
   }
 
   /**
-   * Create an unsaved card (temporary, stream-specific)
+   * Create an untitled card (stream-only, doesn't appear in cards list)
    * @param {string} brainId - Brain ID
    * @param {string} streamId - Stream ID where card belongs
    * @param {string} content - Card content (can be empty string)
    * @param {Object} options - Additional options
-   * @returns {Promise<Card>} - Created unsaved card
+   * @returns {Promise<Card>} - Created untitled card
    */
-  static async createUnsavedCard(brainId, streamId, content = '', options = {}) {
+  static async createUntitledCard(brainId, streamId, content = '', options = {}) {
     if (!streamId) {
-      throw new Error('Stream ID is required for unsaved cards');
+      throw new Error('Stream ID is required for untitled cards');
     }
 
     // Allow empty content for immediate card creation
     const card = await Card.create(brainId, null, {
       content: content || '',
-      cardType: 'unsaved',
       streamId,
       ...options
     });
@@ -57,26 +55,25 @@ class CardFactory {
     // Add card to stream automatically
     await this.addCardToStream(streamId, card.id, options.position);
 
-    console.log(`✅ Created unsaved card in stream ${streamId}`);
+    console.log(`✅ Created untitled card in stream ${streamId}`);
     return card;
   }
 
   /**
-   * Create empty unsaved card for immediate editing
+   * Create empty untitled card for immediate editing
    * @param {string} brainId - Brain ID
    * @param {string} streamId - Stream ID where card belongs
    * @param {number} position - Position in stream or insertAfterPosition
    * @param {boolean} isInsertAfter - If true, insert after the given position
-   * @returns {Promise<Card>} - Created empty unsaved card
+   * @returns {Promise<Card>} - Created empty untitled card
    */
-  static async createEmptyUnsavedCard(brainId, streamId, position = null, isInsertAfter = false) {
+  static async createEmptyUntitledCard(brainId, streamId, position = null, isInsertAfter = false) {
     if (!streamId) {
-      throw new Error('Stream ID is required for unsaved cards');
+      throw new Error('Stream ID is required for untitled cards');
     }
 
     const card = await Card.create(brainId, null, {
       content: '',
-      cardType: 'unsaved',
       streamId
     });
 
@@ -84,11 +81,11 @@ class CardFactory {
     if (isInsertAfter && position !== null) {
       // Insert after the specified position (for generate card functionality)
       await this.addCardToStreamSafely(streamId, card.id, position + 1);
-      console.log(`✅ Created empty unsaved card in stream ${streamId} after position ${position}`);
+      console.log(`✅ Created empty untitled card in stream ${streamId} after position ${position}`);
     } else {
       // Insert at exact position or end if null
       await this.addCardToStreamSafely(streamId, card.id, position);
-      console.log(`✅ Created empty unsaved card in stream ${streamId} at position ${position || 'end'}`);
+      console.log(`✅ Created empty untitled card in stream ${streamId} at position ${position || 'end'}`);
     }
     
     return card;
@@ -129,25 +126,25 @@ class CardFactory {
   }
 
   /**
-   * Convert unsaved card to saved card
-   * @param {string} cardId - Card ID to convert
-   * @param {string} title - New title for saved card
-   * @returns {Promise<Card>} - Converted card
+   * Add title to untitled card (makes it appear in cards list)
+   * @param {string} cardId - Card ID to add title to
+   * @param {string} title - New title for card
+   * @returns {Promise<Card>} - Updated card
    */
-  static async convertUnsavedToSaved(cardId, title) {
+  static async addTitleToCard(cardId, title) {
     const card = await Card.findById(cardId);
     
     if (!card) {
       throw new Error('Card not found');
     }
 
-    if (card.cardType !== 'unsaved') {
-      throw new Error('Only unsaved cards can be converted to saved');
+    if (card.hasTitle()) {
+      throw new Error('Card already has a title');
     }
 
-    await card.convertToSaved(title);
+    await card.addTitle(title);
     
-    console.log(`✅ Converted unsaved card to saved: ${title}`);
+    console.log(`✅ Added title to card: ${title}`);
     return card;
   }
 
@@ -164,13 +161,13 @@ class CardFactory {
       throw new Error('Generated content cannot be empty');
     }
 
-    // AI-generated content always starts as unsaved
-    const card = await this.createUnsavedCard(brainId, streamId, generatedContent, {
+    // AI-generated content always starts as untitled
+    const card = await this.createUntitledCard(brainId, streamId, generatedContent, {
       ...options,
       source: 'ai_generation'
     });
 
-    console.log(`✅ Created AI-generated unsaved card in stream ${streamId}`);
+    console.log(`✅ Created AI-generated untitled card in stream ${streamId}`);
     return card;
   }
 
@@ -198,14 +195,14 @@ class CardFactory {
       
       switch (cardType) {
         case 'saved':
-          card = await this.createSavedCard(brainId, title, chunk.content, options);
+          card = await this.createTitledCard(brainId, title, chunk.content, options);
           break;
           
         case 'unsaved':
           if (!streamId) {
-            throw new Error('Stream ID required for unsaved cards');
+            throw new Error('Stream ID required for untitled cards');
           }
-          card = await this.createUnsavedCard(brainId, streamId, chunk.content, {
+          card = await this.createUntitledCard(brainId, streamId, chunk.content, {
             ...options,
             position: i
           });
@@ -391,13 +388,13 @@ class CardFactory {
     switch (cardType) {
       case 'saved':
         if (!params.title || params.title.trim().length === 0) {
-          throw new Error('Title is required for saved cards');
+          throw new Error('Title is required for titled cards');
         }
         break;
         
       case 'unsaved':
         if (!params.streamId) {
-          throw new Error('Stream ID is required for unsaved cards');
+          throw new Error('Stream ID is required for untitled cards');
         }
         break;
         
@@ -443,6 +440,22 @@ class CardFactory {
     `, params);
 
     return result.rows;
+  }
+  // Legacy method aliases for backward compatibility
+  static async createSavedCard(...args) {
+    return this.createTitledCard(...args);
+  }
+
+  static async createUnsavedCard(...args) {
+    return this.createUntitledCard(...args);
+  }
+
+  static async createEmptyUnsavedCard(...args) {
+    return this.createEmptyUntitledCard(...args);
+  }
+
+  static async convertUnsavedToSaved(...args) {
+    return this.addTitleToCard(...args);
   }
 }
 

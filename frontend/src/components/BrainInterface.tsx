@@ -26,7 +26,7 @@ const BrainInterface: React.FC<BrainInterfaceProps> = ({
   const [selectedBrain, setSelectedBrain] = useState<Brain | null>(null);
   const [brains, setBrains] = useState<Brain[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const { setError } = useApp();
+  const { setError, selectedBrain: globalSelectedBrain, setBrain: setGlobalBrain, setStream: setGlobalStream } = useApp();
 
   useEffect(() => {
     if (isOpen) {
@@ -110,6 +110,31 @@ const BrainInterface: React.FC<BrainInterfaceProps> = ({
     }
   };
 
+  const handleDeleteBrain = async (brain: Brain) => {
+    try {
+      setIsLoading(true);
+      await api.delete(`/brains/${brain.id}`);
+      setBrains(brains.filter(b => b.id !== brain.id));
+      
+      // If we deleted the currently selected brain, go back to brain list
+      if (selectedBrain?.id === brain.id) {
+        setSelectedBrain(null);
+        setView('brain-list');
+      }
+      
+      // Also clear global app state if this brain was globally selected
+      if (globalSelectedBrain?.id === brain.id) {
+        setGlobalBrain(null);
+        setGlobalStream(null);
+      }
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Failed to delete brain';
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -136,6 +161,7 @@ const BrainInterface: React.FC<BrainInterfaceProps> = ({
             onBrainSelect={handleBrainSelect}
             onCreateBrain={handleCreateBrain}
             onRenameBrain={handleRenameBrain}
+            onDeleteBrain={handleDeleteBrain}
           />
         ) : selectedBrain ? (
           <BrainManagement

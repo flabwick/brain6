@@ -7,6 +7,7 @@ interface BrainListProps {
   onBrainSelect: (brain: Brain) => void;
   onCreateBrain: (title: string) => void;
   onRenameBrain?: (brain: Brain, newTitle: string) => void;
+  onDeleteBrain?: (brain: Brain) => void;
 }
 
 const BrainList: React.FC<BrainListProps> = ({
@@ -15,6 +16,7 @@ const BrainList: React.FC<BrainListProps> = ({
   onBrainSelect,
   onCreateBrain,
   onRenameBrain,
+  onDeleteBrain,
 }) => {
   const [isCreating, setIsCreating] = useState(false);
   const [newBrainTitle, setNewBrainTitle] = useState('');
@@ -58,6 +60,16 @@ const BrainList: React.FC<BrainListProps> = ({
     } else if (e.key === 'Escape') {
       setRenamingBrainId(null);
       setRenameTitle('');
+    }
+  };
+
+  const handleDeleteBrain = (brain: Brain, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent brain selection
+    const brainName = (brain as any).name || brain.title;
+    if (window.confirm(`Are you sure you want to delete "${brainName}"? This will permanently delete all data, files, and streams in this brain.`)) {
+      if (onDeleteBrain) {
+        onDeleteBrain(brain);
+      }
     }
   };
 
@@ -152,7 +164,19 @@ const BrainList: React.FC<BrainListProps> = ({
                     {(brain as any).name || brain.title}
                   </h4>
                 )}
-                <span className="brain-card-icon">🧠</span>
+                <div className="brain-card-actions">
+                  <span className="brain-card-icon">🧠</span>
+                  {onDeleteBrain && (
+                    <button
+                      type="button"
+                      className="brain-delete-btn"
+                      onClick={(e) => handleDeleteBrain(brain, e)}
+                      title="Delete brain permanently"
+                    >
+                      🗑️
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="brain-card-meta">
                 <p className="brain-card-storage">

@@ -963,8 +963,39 @@ body {
   width: 100%;
 }
 
+.brain-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
 .brain-card-icon {
   font-size: 20px;
+}
+
+.brain-delete-btn {
+  background: none;
+  border: none;
+  padding: var(--spacing-xs);
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  font-size: 16px;
+  color: #ef4444;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+}
+
+.brain-delete-btn:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  transform: scale(1.1);
+}
+
+.brain-delete-btn:active {
+  transform: scale(0.95);
 }
 
 .brain-card-meta {

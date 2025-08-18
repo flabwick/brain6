@@ -21,7 +21,7 @@ class Card {
     this.lastModified = data.last_modified;
     this.createdAt = data.created_at;
     this.updatedAt = data.updated_at;
-    // Card Type System properties
+    // Card Type System properties (legacy - now simplified to titled/untitled)
     this.cardType = data.card_type || 'saved';
     this.isBrainWide = data.is_brain_wide !== undefined ? data.is_brain_wide : true;
     this.streamSpecificId = data.stream_specific_id || null;
@@ -37,7 +37,6 @@ class Card {
    * @param {string} options.filePath - Path to source file (optional)
    * @param {string} options.fileHash - File hash for sync (optional)
    * @param {number} options.fileSize - File size in bytes (optional)
-   * @param {string} options.cardType - Card type ('saved', 'file', 'unsaved')
    * @param {string} options.streamId - Stream ID for unsaved cards
    * @param {string} options.fileId - File ID for file cards
    * @returns {Promise<Card>} - Created card instance
@@ -48,29 +47,31 @@ class Card {
       filePath = null,
       fileHash = null,
       fileSize = 0,
-      cardType = 'saved',
       streamId = null,
       fileId = null
     } = options;
-
-    // Validate card type
-    if (!['saved', 'file', 'unsaved'].includes(cardType)) {
-      throw new Error('Invalid card type. Must be saved, file, or unsaved');
-    }
-
-    // Validate title requirements based on card type
-    if (cardType === 'saved' && (!title || title.trim().length === 0)) {
-      throw new Error('Card title is required for saved cards');
-    }
     
-    // Allow unsaved cards without titles
-    if (cardType === 'unsaved' && title && title.trim().length === 0) {
-      title = null; // Normalize empty strings to null for unsaved cards
+    let cardType = options.cardType || null; // Use let for reassignment
+
+    // Determine card type based on title and context
+    if (!cardType) {
+      if (fileId) {
+        cardType = 'file';
+      } else if (title && title.trim().length > 0) {
+        cardType = 'saved'; // Titled cards are saved
+      } else {
+        cardType = 'unsaved'; // Untitled cards are unsaved
+      }
     }
 
-    // Validate unsaved card requirements
-    if (cardType === 'unsaved' && !streamId) {
-      throw new Error('Stream ID is required for unsaved cards');
+    // Normalize empty strings to null for untitled cards
+    if (title && title.trim().length === 0) {
+      title = null;
+    }
+
+    // Validate stream requirements for untitled cards
+    if (!title && !streamId) {
+      throw new Error('Stream ID is required for untitled cards');
     }
 
     // Validate file card requirements
@@ -96,7 +97,7 @@ class Card {
       const brain = brainResult.rows[0];
 
       // Check if card title already exists in this brain (only for titled cards)
-      if (title && title.trim() && cardType === 'saved') {
+      if (title && title.trim()) {
         const existingCard = await client.query(
           'SELECT id FROM cards WHERE brain_id = $1 AND title = $2 AND is_active = true',
           [brainId, title.trim()]
@@ -107,8 +108,8 @@ class Card {
         }
       }
 
-      // Validate stream exists for unsaved cards
-      if (cardType === 'unsaved') {
+      // Validate stream exists for untitled cards
+      if (!title) {
         const streamResult = await client.query(
           'SELECT id FROM streams WHERE id = $1 AND brain_id = $2',
           [streamId, brainId]
@@ -129,8 +130,8 @@ class Card {
       }
 
       // Set card type specific properties
-      const isBrainWide = cardType !== 'unsaved';
-      const streamSpecificId = cardType === 'unsaved' ? streamId : null;
+      const isBrainWide = !!title; // Titled cards are brain-wide
+      const streamSpecificId = !title ? streamId : null; // Untitled cards are stream-specific
       const titleToStore = title ? title.trim() : null;
 
       // Insert card into database
@@ -148,8 +149,8 @@ class Card {
 
       const card = new Card(result.rows[0]);
 
-      // If content provided and no file path, save as markdown file (only for saved cards)
-      if (content && !filePath && cardType === 'saved' && titleToStore) {
+      // If content provided and no file path, save as markdown file (only for titled cards)
+      if (content && !filePath && titleToStore) {
         const sanitizedTitle = titleToStore.replace(/[^a-zA-Z0-9\s-]/g, '').replace(/\s+/g, '-').toLowerCase();
         const fileName = `${sanitizedTitle}.md`;
         const cardFilePath = path.join(brain.folder_path, 'cards', fileName);
@@ -395,7 +396,7 @@ class Card {
       throw new Error('No valid fields to update');
     }
 
-    // Validate card type changes
+    // Legacy card type validation (now simplified)
     if (validUpdates.card_type && !['saved', 'file', 'unsaved'].includes(validUpdates.card_type)) {
       throw new Error('Invalid card type. Must be saved, file, or unsaved');
     }
@@ -425,17 +426,17 @@ class Card {
   }
 
   /**
-   * Convert unsaved card to saved card
+   * Add title to untitled card (converts to titled/saved)
    * @param {string} title - New title for the card
    * @returns {Promise<void>}
    */
-  async convertToSaved(title) {
-    if (this.cardType !== 'unsaved') {
-      throw new Error('Only unsaved cards can be converted to saved');
+  async addTitle(title) {
+    if (this.hasTitle()) {
+      throw new Error('Card already has a title');
     }
 
     if (!title || title.trim().length === 0) {
-      throw new Error('Title is required when converting to saved card');
+      throw new Error('Title is required');
     }
 
     if (title.length > 200) {
@@ -495,7 +496,7 @@ class Card {
       this.updatedAt = new Date();
     });
 
-    console.log(`✅ Converted unsaved card to saved: ${title}`);
+    console.log(`✅ Added title to card: ${title}`);
   }
 
   /**
@@ -516,17 +517,11 @@ class Card {
   }
 
   /**
-   * Check if card is saved to brain (has title for unsaved cards)
+   * Check if card appears in brain cards list (has title)
    * @returns {boolean}
    */
-  isSavedToBrain() {
-    if (this.cardType === 'saved' || this.cardType === 'file') {
-      return true;
-    }
-    if (this.cardType === 'unsaved') {
-      return this.hasTitle(); // Unsaved cards with titles are effectively saved to brain
-    }
-    return false;
+  appearsInCardsList() {
+    return this.hasTitle();
   }
 
   /**
@@ -538,7 +533,7 @@ class Card {
       return this.title;
     }
     
-    if (this.cardType === 'unsaved') {
+    if (!this.hasTitle()) {
       return 'Click to add title...';
     }
     
@@ -551,9 +546,9 @@ class Card {
    */
   getTypeInfo() {
     const typeMap = {
-      saved: { icon: '💾', label: 'Saved Card', description: 'Permanent brain-wide content' },
+      saved: { icon: '💾', label: 'Titled Card', description: 'Appears in cards list' },
       file: { icon: '📄', label: 'File Card', description: 'Linked document or file' },
-      unsaved: { icon: '⚠️', label: 'Unsaved Card', description: 'Temporary stream content' }
+      unsaved: { icon: '📝', label: 'Untitled Card', description: 'Stream-only content' }
     };
 
     return typeMap[this.cardType] || typeMap.saved;
@@ -766,7 +761,7 @@ class Card {
       fileId: this.fileId,
       isFileCard: this.cardType === 'file' || !!this.fileId,
       hasTitle: this.hasTitle(),
-      isSavedToBrain: this.isSavedToBrain(),
+      appearsInCardsList: this.appearsInCardsList(),
       canBeInAIContext: this.canBeInAIContext(),
       typeInfo: typeInfo
     };
@@ -844,12 +839,12 @@ class Card {
   }
 
   /**
-   * Find unsaved cards in a specific stream
+   * Find untitled cards in a specific stream
    * @param {string} streamId - Stream ID
    * @param {Object} options - Query options
-   * @returns {Promise<Array<Card>>} - Array of unsaved cards in stream
+   * @returns {Promise<Array<Card>>} - Array of untitled cards in stream
    */
-  static async findUnsavedInStream(streamId, options = {}) {
+  static async findUntitledInStream(streamId, options = {}) {
     const {
       activeOnly = true,
       orderBy = 'created_at ASC'
@@ -859,7 +854,7 @@ class Card {
     
     const result = await query(`
       SELECT * FROM cards 
-      WHERE stream_specific_id = $1 AND card_type = 'unsaved' ${whereClause}
+      WHERE stream_specific_id = $1 AND (title IS NULL OR title = '') ${whereClause}
       ORDER BY ${orderBy}
     `, [streamId]);
 

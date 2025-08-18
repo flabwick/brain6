@@ -152,9 +152,9 @@ class Brain {
   }
 
   /**
-   * Get all cards in this brain
+   * Get all titled cards in this brain (only cards with titles appear in cards list)
    * @param {boolean} activeOnly - Only return active cards (default: true)
-   * @returns {Promise<Array>} - Array of card objects
+   * @returns {Promise<Array>} - Array of titled card objects
    */
   async getCards(activeOnly = true) {
     const whereClause = activeOnly ? 'AND is_active = true' : '';
@@ -162,7 +162,7 @@ class Brain {
     const result = await query(`
       SELECT * FROM cards 
       WHERE brain_id = $1 ${whereClause}
-      AND (card_type IS NULL OR card_type != 'unsaved')
+      AND title IS NOT NULL AND title != ''
       ORDER BY title
     `, [this.id]);
 

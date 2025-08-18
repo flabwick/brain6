@@ -174,77 +174,77 @@ function generateTitle(fileName, metadata) {
  * Extract cover image from EPUB file
  * @param {string} epubPath - Path to EPUB file
  * @param {Object} coverInfo - Cover image info from metadata
- * @param {string} outputDir - Directory to save extracted cover image
+ * @param {string} filesDir - Files directory (not covers directory)
  * @returns {Promise<string|null>} - Path to extracted cover image or null
  */
-async function extractCoverImage(epubPath, coverInfo, outputDir) {
+async function extractCoverImage(epubPath, coverInfo, filesDir) {
   return new Promise((resolve, reject) => {
     try {
       const epub = new EPub(epubPath);
       
-      epub.on('error', (error) => {
-        reject(new Error(`EPUB parsing error: ${error.message}`));
+      epub.on('error', (err) => {
+        console.error('EPUB parsing error:', err);
+        reject(err);
       });
-      
+
       epub.on('end', async () => {
         try {
-          if (!coverInfo.id || !epub.manifest[coverInfo.id]) {
-            resolve(null);
-            return;
-          }
-          
-          // Get the cover image data
+          // Get cover image data
           epub.getImage(coverInfo.id, async (error, data, mimeType) => {
+            if (error) {
+              console.error('Error extracting cover image:', error);
+              resolve(null);
+              return;
+            }
+
             try {
-              if (error) {
-                console.warn('Could not extract cover image:', error.message);
-                resolve(null);
-                return;
-              }
-              
-              if (!data || !data.length) {
-                resolve(null);
-                return;
-              }
-              
               // Determine file extension from mime type
-              let extension = '.jpg';
+              let extension = '.jpg'; // default
               if (mimeType) {
                 if (mimeType.includes('png')) extension = '.png';
                 else if (mimeType.includes('gif')) extension = '.gif';
                 else if (mimeType.includes('webp')) extension = '.webp';
+                else if (mimeType.includes('jpeg') || mimeType.includes('jpg')) extension = '.jpg';
               }
               
-              // Create output directory if provided
-              if (outputDir) {
-                await fs.ensureDir(outputDir);
+              // Create covers subdirectory within files directory if provided
+              if (filesDir) {
+                const coversDir = path.join(filesDir, 'covers');
+                await fs.ensureDir(coversDir);
+                
+                // Generate filename
+                const baseFileName = path.basename(epubPath, '.epub');
+                const coverFileName = `${baseFileName}_cover${extension}`;
+                const coverPath = path.join(coversDir, coverFileName);
+                
+                // Save the image file
+                await fs.writeFile(coverPath, data);
+                console.log(`✅ Extracted cover image: ${coverPath}`);
+                resolve(coverPath);
+              } else {
+                // Generate filename without directory
+                const baseFileName = path.basename(epubPath, '.epub');
+                const coverFileName = `${baseFileName}_cover${extension}`;
+                
+                // Save the image file in current directory
+                await fs.writeFile(coverFileName, data);
+                console.log(`✅ Extracted cover image: ${coverFileName}`);
+                resolve(coverFileName);
               }
-              
-              // Generate filename
-              const baseFileName = path.basename(epubPath, '.epub');
-              const coverFileName = `${baseFileName}_cover${extension}`;
-              const coverPath = outputDir ? path.join(outputDir, coverFileName) : coverFileName;
-              
-              // Save the image file
-              await fs.writeFile(coverPath, data);
-              
-              console.log(`✅ Extracted EPUB cover image: ${coverPath}`);
-              resolve(coverPath);
-              
             } catch (saveError) {
               console.error('Error saving cover image:', saveError);
-              reject(saveError);
+              resolve(null);
             }
           });
-          
         } catch (extractError) {
-          reject(extractError);
+          console.error('Error during cover extraction:', extractError);
+          resolve(null);
         }
       });
-      
+
       epub.parse();
-      
     } catch (error) {
+      console.error('Error initializing EPUB parser:', error);
       reject(error);
     }
   });
@@ -271,7 +271,7 @@ async function processEpubFile(filePath, options = {}) {
     let coverImagePath = null;
     if (coverImage && options.extractCoverImage !== false) {
       try {
-        coverImagePath = await extractCoverImage(filePath, coverImage, options.outputDir);
+        coverImagePath = await extractCoverImage(filePath, coverImage, options.filesDir);
       } catch (coverError) {
         console.warn(`Could not extract cover image for ${filePath}:`, coverError.message);
       }

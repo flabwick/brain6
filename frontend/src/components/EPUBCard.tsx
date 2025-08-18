@@ -83,7 +83,7 @@ const EPUBCard: React.FC<EPUBCardProps> = ({
 
   const loadCoverImage = async (fileId: string, coverPath: string) => {
     try {
-      const response = await api.get(`/files/${fileId}/cover`, {
+      const response = await api.get(`/brains/${card.brainId}/files/${fileId}/cover`, {
         responseType: 'blob'
       });
       const blob = new Blob([response.data]);
