@@ -1,9 +1,8 @@
 import axios from 'axios';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+import config from '../config.js';
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: config.apiUrl,
   withCredentials: true, // Include cookies for session-based auth
   headers: {
     'Content-Type': 'application/json',

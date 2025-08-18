@@ -7,6 +7,7 @@ import FileSearchInterface from './FileSearchInterface';
 import { Stream, StreamCard, Card as CardType } from '../types';
 import api from '../services/api';
 import { useApp } from '../contexts/AppContext';
+import config from '../config.js';
 
 interface StreamItem {
   itemType: 'card' | 'file';
@@ -367,7 +368,7 @@ const StreamView: React.FC<StreamViewProps> = ({ streamId, brainId }) => {
         console.log('🔍 AI generation initiated:', initResponse.status);
 
         // Then connect to the streaming endpoint using EventSource
-        const eventSourceUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:3001/api'}/ai/stream/${newCardId}`;
+        const eventSourceUrl = `${config.apiUrl}/ai/stream/${newCardId}`;
         
         const eventSource = new EventSource(eventSourceUrl, {
           withCredentials: true

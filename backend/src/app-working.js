@@ -11,13 +11,27 @@ const app = express();
 // Middleware setup (order is important)
 app.use(express.json({ limit: '50mb' }));
 
-// CORS configuration
+// Environment-aware CORS configuration
+const getCorsOrigins = () => {
+  const isDevelopment = process.env.NODE_ENV !== 'production';
+  
+  if (isDevelopment) {
+    return [
+      'http://localhost:3001',
+      'http://localhost:4201',
+      'http://127.0.0.1:3001',
+      'http://127.0.0.1:4201'
+    ];
+  } else {
+    return [
+      'https://dev.jimboslice.xyz',
+      'https://api-dev.jimboslice.xyz'
+    ];
+  }
+};
+
 app.use(cors({
-  origin: [
-    'https://dev.jimboslice.xyz',
-    'http://localhost:3000',
-    'http://localhost:4201'
-  ],
+  origin: getCorsOrigins(),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
