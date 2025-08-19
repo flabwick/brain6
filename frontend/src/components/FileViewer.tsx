@@ -650,8 +650,8 @@ const PDFViewer: React.FC<{
                 display: 'flex',
                 flexDirection: 'column',
                 width: '100%',
-                height: '400px',
-                maxHeight: '400px',
+                height: '650px',
+                maxHeight: '650px',
                 overflowY: 'scroll',
                 overflowX: 'hidden',
                 contain: 'layout style paint',
@@ -662,11 +662,6 @@ const PDFViewer: React.FC<{
                 WebkitOverflowScrolling: 'touch'
               }}
             >
-              {/* SIMPLE SCROLL TEST */}
-              <div style={{height: '2000px', background: 'red', margin: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', fontWeight: 'bold', color: 'white'}}>
-                TALL RED TEST - 2000px HEIGHT
-              </div>
-              
               {Array.from(new Array(numPages), (el, index) => (
                 <div
                   key={`page_container_${index + 1}`}
@@ -674,15 +669,12 @@ const PDFViewer: React.FC<{
                   ref={(el) => { pageRefs.current[index] = el; }}
                   data-page-number={index + 1}
                   style={{
-                    border: '2px solid purple',
                     margin: '10px 0',
-                    padding: '10px',
-                    background: 'rgba(255, 255, 0, 0.1)'
+                    display: 'flex',
+                    justifyContent: 'center',
+                    width: '100%'
                   }}
                 >
-                  <div style={{fontSize: '12px', marginBottom: '5px', fontWeight: 'bold'}}>
-                    PAGE {index + 1} - Scale: {scale}
-                  </div>
                   <Page
                     pageNumber={index + 1}
                     scale={scale}
@@ -691,21 +683,6 @@ const PDFViewer: React.FC<{
                   />
                 </div>
               ))}
-              
-              {/* DEBUG: More test content */}
-              <div style={{
-                width: '100%', 
-                height: '300px', 
-                background: 'pink', 
-                margin: '10px 0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '18px',
-                fontWeight: 'bold'
-              }}>
-                DEBUG: Bottom Test Content (300px) - Total Pages: {numPages}
-              </div>
             </div>
           )}
         </Document>
