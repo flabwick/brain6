@@ -1,5 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Document, Page, pdfjs } from 'react-pdf';
 import api from '../services/api';
+
+// Configure PDF.js worker
+pdfjs.GlobalWorkerOptions.workerSrc = `${window.location.origin}/pdf.worker.min.js`;
 
 interface FileViewerProps {
   file: any; // File data from stream
@@ -36,12 +40,76 @@ const FileViewer: React.FC<FileViewerProps> = ({
   onAddFileBelow,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Move PDF state to parent to persist across re-mounts
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+
+  // Debug component lifecycle
+  useEffect(() => {
+    console.log('FileViewer component mounted/re-mounted');
+    return () => {
+      console.log('FileViewer component unmounting');
+    };
+  }, []);
+
+  // PDF loading effect
+  useEffect(() => {
+    console.log('PDF loading effect - file object:', {
+      fileId: file?.id,
+      fileType: file?.file_type,
+      fileKeys: Object.keys(file || {}),
+      fullFile: file
+    });
+
+    console.log('PDF loading effect triggered with:', {
+      fileId: file?.id,
+      fileType: file?.file_type,
+      isExpanded,
+      pdfUrl: !!pdfUrl
+    });
+
+    if ((file?.file_type === 'pdf' || file?.fileType === 'pdf') && isExpanded && !pdfUrl) {
+      console.log('Conditions met - starting PDF load');
+      loadPdfDocument();
+    } else {
+      console.log('Conditions not met for PDF load:', {
+        isPdf: file?.file_type === 'pdf' || file?.fileType === 'pdf',
+        isExpanded,
+        noPdfUrl: !pdfUrl
+      });
+    }
+  }, [file?.id, isExpanded, pdfUrl]);
+
+  const loadPdfDocument = async () => {
+    console.log('Starting PDF load for file:', file.id);
+    
+    try {
+      const response = await api.get(`/cards/files/${file.id}/download`, {
+        responseType: 'arraybuffer'
+      });
+      
+      console.log('PDF downloaded successfully, creating blob URL');
+      
+      const arrayBuffer = response.data;
+      const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      
+      console.log('Created blob URL:', url);
+      setPdfUrl(url);
+      console.log('Set pdfUrl to:', url);
+      
+    } catch (err) {
+      console.error('Failed to load PDF:', err);
+    }
+  };
+
+  // Debug FileViewer render
+  console.log('FileViewer render - file type:', file?.file_type || file?.fileType);
+  console.log('FileViewer render - isExpanded:', isExpanded);
+  console.log('FileViewer render - pdfUrl:', pdfUrl);
 
   const handleDownload = async () => {
     try {
-      const response = await api.get(`/files/${file.id}/download`, {
+      const response = await api.get(`/cards/files/${file.id}/download`, {
         responseType: 'blob'
       });
       
@@ -168,9 +236,19 @@ const FileViewer: React.FC<FileViewerProps> = ({
           {file.fileType === 'epub' && (
             <EPUBViewer file={file} />
           )}
-          {file.fileType === 'pdf' && (
-            <PDFViewer file={file} />
-          )}
+          {file.fileType === 'pdf' && (() => {
+            console.log('FileViewer checking PDF render conditions:', {
+              fileType: file.fileType,
+              isExpanded,
+              shouldRenderPDF: file.fileType === 'pdf' && isExpanded
+            });
+            console.log('FileViewer about to render PDFViewer with props:', {
+              file: file?.id,
+              pdfUrl,
+              pdfUrlType: typeof pdfUrl
+            });
+            return <PDFViewer file={file} pdfUrl={pdfUrl} setPdfUrl={setPdfUrl} />;
+          })()}
         </div>
       )}
 
@@ -266,31 +344,28 @@ const FileViewer: React.FC<FileViewerProps> = ({
     </div>
   );
 };
-
-// EPUB Viewer Component
 const EPUBViewer: React.FC<{ file: any }> = ({ file }) => {
   const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    const loadCoverImage = async (fileId: string, coverPath: string) => {
+      try {
+        const response = await api.get(`/brains/${file.brainId}/files/${fileId}/cover`, {
+          responseType: 'blob'
+        });
+        const blob = new Blob([response.data]);
+        const url = URL.createObjectURL(blob);
+        setCoverImageUrl(url);
+      } catch (error) {
+        console.error('Failed to load cover image:', error);
+      }
+    };
+
     // Try to load cover image if available
     if (file.coverImagePath) {
       loadCoverImage(file.id, file.coverImagePath);
     }
-  }, [file.id, file.coverImagePath]);
-
-  const loadCoverImage = async (fileId: string, coverPath: string) => {
-    try {
-      const response = await api.get(`/brains/${file.brainId}/files/${fileId}/cover`, {
-        responseType: 'blob'
-      });
-      const blob = new Blob([response.data]);
-      const url = URL.createObjectURL(blob);
-      setCoverImageUrl(url);
-    } catch (error) {
-      console.error('Failed to load cover image:', error);
-      // Not critical, just no cover image
-    }
-  };
+  }, [file.id, file.coverImagePath, file.brainId]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
@@ -380,36 +455,260 @@ const EPUBViewer: React.FC<{ file: any }> = ({ file }) => {
 };
 
 // PDF Viewer Component
-const PDFViewer: React.FC<{ file: any }> = ({ file }) => {
+const PDFViewer: React.FC<{ 
+  file: any; 
+  pdfUrl: string | null; 
+  setPdfUrl: React.Dispatch<React.SetStateAction<string | null>>; 
+}> = ({ file, pdfUrl, setPdfUrl }) => {
+  const [numPages, setNumPages] = useState<number>(0);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [scale, setScale] = useState<number>(1.0);
+  const [viewMode, setViewMode] = useState<'single' | 'scroll'>('single');
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Refs for scroll mode page tracking
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
+    console.log('PDF loaded successfully:', numPages, 'pages');
+    setNumPages(numPages);
+    setCurrentPage(1);
+    setIsLoading(false);
+    setError(null);
+    // Initialize page refs array
+    pageRefs.current = new Array(numPages).fill(null);
+  };
+
+  const onDocumentLoadError = (error: any) => {
+    console.error('PDF load error:', error);
+    setError('Failed to load PDF document');
+    setIsLoading(false);
+  };
+
+  const goToPage = (pageNumber: number) => {
+    if (pageNumber >= 1 && pageNumber <= numPages) {
+      setCurrentPage(pageNumber);
+      
+      // In scroll mode, scroll to the specific page
+      if (viewMode === 'scroll' && pageRefs.current[pageNumber - 1]) {
+        pageRefs.current[pageNumber - 1]?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        });
+      }
+    }
+  };
+
+  const nextPage = () => goToPage(currentPage + 1);
+  const prevPage = () => goToPage(currentPage - 1);
+
+  const zoomIn = () => setScale(prev => Math.min(prev + 0.25, 3.0));
+  const zoomOut = () => setScale(prev => Math.max(prev - 0.25, 0.5));
+  const resetZoom = () => setScale(1.0);
+
+  // Intersection Observer for page tracking in scroll mode
+  useEffect(() => {
+    if (viewMode !== 'scroll' || !scrollContainerRef.current || numPages === 0) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let maxVisiblePage = 1;
+        let maxVisibleRatio = 0;
+
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const pageIndex = parseInt(entry.target.getAttribute('data-page-number') || '1');
+            if (entry.intersectionRatio > maxVisibleRatio) {
+              maxVisibleRatio = entry.intersectionRatio;
+              maxVisiblePage = pageIndex;
+            }
+          }
+        });
+
+        if (maxVisibleRatio > 0.3) { // Only update if page is significantly visible
+          setCurrentPage(maxVisiblePage);
+        }
+      },
+      {
+        root: scrollContainerRef.current,
+        rootMargin: '-20px 0px -20px 0px',
+        threshold: [0.1, 0.3, 0.5, 0.7, 0.9]
+      }
+    );
+
+    // Observe all page elements
+    pageRefs.current.forEach((pageRef) => {
+      if (pageRef) {
+        observer.observe(pageRef);
+      }
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [viewMode, numPages]);
+
+  if (!pdfUrl) {
+    return (
+      <div className="pdf-loading">
+        <p>Loading PDF...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="pdf-error">
+        <p>Error: {error}</p>
+        <button onClick={() => window.location.reload()}>Retry</button>
+      </div>
+    );
+  }
+
   return (
-    <div className="pdf-viewer-portrait">
-      <div className="pdf-viewer-container">
-        <div className="pdf-viewer-header">
-          <div className="pdf-file-info">
-            <h3>{file.title || file.fileName}</h3>
-            <div className="pdf-metadata">
-              {file.author && <span>Author: {file.author}</span>}
-              {file.pageCount && <span>Pages: {file.pageCount}</span>}
-              <span>Size: {(file.fileSize / 1024 / 1024).toFixed(1)} MB</span>
-            </div>
-          </div>
-        </div>
-        
-        <div className="pdf-placeholder">
-          <div className="pdf-icon">📄</div>
-          <h4>PDF Viewer</h4>
-          <p>Full PDF viewer coming soon</p>
+    <div className="pdf-viewer">
+      {/* PDF Controls */}
+      <div className="pdf-controls">
+        <div className="pdf-nav-controls">
           <button 
-            className="pdf-action-btn primary"
-            onClick={() => {
-              // Download handled by parent
-              const event = new CustomEvent('download');
-              document.dispatchEvent(event);
-            }}
+            onClick={prevPage} 
+            disabled={currentPage <= 1}
+            className="pdf-btn"
           >
-            📥 Download PDF
+            ← Prev
+          </button>
+          
+          <div className="pdf-page-info">
+            <input
+              type="number"
+              value={currentPage}
+              onChange={(e) => goToPage(parseInt(e.target.value))}
+              min={1}
+              max={numPages}
+              className="pdf-page-input"
+            />
+            <span>of {numPages}</span>
+          </div>
+          
+          <button 
+            onClick={nextPage} 
+            disabled={currentPage >= numPages}
+            className="pdf-btn"
+          >
+            Next →
           </button>
         </div>
+
+        <div className="pdf-zoom-controls">
+          <button onClick={zoomOut} className="pdf-btn">−</button>
+          <span className="pdf-zoom-level">{Math.round(scale * 100)}%</span>
+          <button onClick={zoomIn} className="pdf-btn">+</button>
+          <button onClick={resetZoom} className="pdf-btn">Reset</button>
+        </div>
+
+        <div className="pdf-view-controls">
+          <button 
+            onClick={() => setViewMode('single')}
+            className={`pdf-btn ${viewMode === 'single' ? 'active' : ''}`}
+          >
+            Single Page
+          </button>
+          <button 
+            onClick={() => setViewMode('scroll')}
+            className={`pdf-btn ${viewMode === 'scroll' ? 'active' : ''}`}
+          >
+            Scroll View
+          </button>
+        </div>
+      </div>
+
+      {/* PDF Document */}
+      <div className="pdf-document-container">
+        <Document
+          file={pdfUrl}
+          onLoadSuccess={onDocumentLoadSuccess}
+          onLoadError={onDocumentLoadError}
+          loading={<div className="pdf-loading">Loading PDF...</div>}
+        >
+          {viewMode === 'single' ? (
+            <Page 
+              pageNumber={currentPage} 
+              scale={scale}
+              renderTextLayer={false}
+              renderAnnotationLayer={false}
+            />
+          ) : (
+            <div 
+              className="pdf-scroll-container" 
+              ref={scrollContainerRef}
+              style={{
+                /* Inline styles for maximum specificity */
+                display: 'flex',
+                flexDirection: 'column',
+                width: '100%',
+                height: '400px',
+                maxHeight: '400px',
+                overflowY: 'scroll',
+                overflowX: 'hidden',
+                contain: 'layout style paint',
+                isolation: 'isolate',
+                position: 'relative',
+                zIndex: 10,
+                transform: 'translateZ(0)',
+                WebkitOverflowScrolling: 'touch'
+              }}
+            >
+              {/* SIMPLE SCROLL TEST */}
+              <div style={{height: '2000px', background: 'red', margin: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', fontWeight: 'bold', color: 'white'}}>
+                TALL RED TEST - 2000px HEIGHT
+              </div>
+              
+              {Array.from(new Array(numPages), (el, index) => (
+                <div
+                  key={`page_container_${index + 1}`}
+                  className="pdf-page-container"
+                  ref={(el) => { pageRefs.current[index] = el; }}
+                  data-page-number={index + 1}
+                  style={{
+                    border: '2px solid purple',
+                    margin: '10px 0',
+                    padding: '10px',
+                    background: 'rgba(255, 255, 0, 0.1)'
+                  }}
+                >
+                  <div style={{fontSize: '12px', marginBottom: '5px', fontWeight: 'bold'}}>
+                    PAGE {index + 1} - Scale: {scale}
+                  </div>
+                  <Page
+                    pageNumber={index + 1}
+                    scale={scale}
+                    renderTextLayer={false}
+                    renderAnnotationLayer={false}
+                  />
+                </div>
+              ))}
+              
+              {/* DEBUG: More test content */}
+              <div style={{
+                width: '100%', 
+                height: '300px', 
+                background: 'pink', 
+                margin: '10px 0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '18px',
+                fontWeight: 'bold'
+              }}>
+                DEBUG: Bottom Test Content (300px) - Total Pages: {numPages}
+              </div>
+            </div>
+          )}
+        </Document>
       </div>
     </div>
   );
